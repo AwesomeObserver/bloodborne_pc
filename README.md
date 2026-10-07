@@ -6,7 +6,7 @@ The original PlayStation 4 game runs directly on your PC: its own x86-64 code ru
 and the graphics are translated to Vulkan. No emulator window, no setup scripts: unpack the zip,
 start `Bloodborne.exe`, pick your game folder and press **PLAY**.
 
-**[Download the latest version](https://github.com/Supermedo/bloodborne_pc/releases/latest)**
+**[Download the latest version](https://github.com/Supermedo/bloodborne_pc/releases/latest)** · **[Join the Discord](https://discord.gg/upYN5k9tV)**
 
 > **No game files are included.** You need your own decrypted dump of Bloodborne
 > (CUSA03173). Version 1.09 is needed for the community patches (60/90/unlocked FPS,
@@ -65,7 +65,7 @@ Keyboard: WASD move, arrows camera, Space Cross, Left Shift Circle, E Square, Q 
 
 ## Problems and feedback
 
-Open an [issue](https://github.com/Supermedo/bloodborne_pc/issues) and attach
+Ask on the [Discord server](https://discord.gg/upYN5k9tV), or open an [issue](https://github.com/Supermedo/bloodborne_pc/issues) and attach
 `user\last_run.log` from the game folder, with your graphics card and what happened.
 If the game shows only a black screen, try **Advanced → Clear shader cache** first.
 
