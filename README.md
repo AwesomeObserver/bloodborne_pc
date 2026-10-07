@@ -1,6 +1,6 @@
 # Bloodborne for Windows
 
-**Bloodborne running natively on Windows 10 and 11, by [Supermedo](https://github.com/Supermedo).**
+**Bloodborne running natively on Windows 10 and 11, by [Supermedo](https://github.com/Supermedo) Mohammed Albarghouthi.**
 
 The original PlayStation 4 game runs directly on your PC: its own x86-64 code runs natively,
 and the graphics are translated to Vulkan. No emulator window, no setup scripts: unpack the zip,
