@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 #ifdef _WIN32
 #include <windows.h>
 #include <cpuid.h>
@@ -31,6 +32,12 @@ constexpr std::array<std::size_t, 5> Sites{0x143ceaa, 0x143c6e8, 0x143c984, 0x14
 constexpr std::array<unsigned char, 18> MainCode{
     0xc4, 0xc1, 0x7a, 0x10, 0x85, 0x40, 0x01, 0x00, 0x00,
     0xc4, 0xc1, 0x7a, 0x10, 0x8d, 0x50, 0x01, 0x00, 0x00};
+// Supported 1.09 camera update routine. The four fixed stores above only
+// disable movement auto-rotation; the other angle stores also apply stick
+// response and interpolation. All of them must yield to direct mouse input.
+constexpr std::size_t FunctionBegin = 0x143ac60, FunctionEnd = 0x143fad0;
+constexpr unsigned ExpectedStoreSignatures = 29;
+constexpr std::size_t TrampolineSize = 16384;
 
 void Add(std::atomic<std::int64_t>& target, float delta) {
     const auto d = std::int64_t(std::clamp(double(delta) * Fixed,
@@ -72,7 +79,7 @@ bool Monocular(float dx, float dy) {
     return true;
 }
 
-bool StoreInstruction(const unsigned char* p) {
+bool StoreInstruction(const unsigned char* p, bool angles_only = false) {
     ZydisDecoder decoder;
     ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64);
     ZydisDecodedInstruction inst{};
@@ -89,7 +96,7 @@ bool StoreInstruction(const unsigned char* p) {
     // The 1.09 camera also stores its rotation state at +130 and +294.
     // Checking only the angle fields we write in Apply rejects these stores.
     return offset == 0x130 || offset == 0x140 || offset == 0x144 || offset == 0x150 ||
-           offset == 0x26c || offset == 0x270 || offset == 0x294;
+           offset == 0x294 || (!angles_only && (offset == 0x26c || offset == 0x270));
 }
 
 bool RotationPatch(const unsigned char* p) {
@@ -125,7 +132,7 @@ void* AllocateNear(unsigned char* image, std::uint64_t size) {
         MEMORY_BASIC_INFORMATION region{};
         if (!VirtualQuery(reinterpret_cast<void*>(address), &region, sizeof(region))) break;
         if (region.State == MEM_FREE) {
-            if (void* p = VirtualAlloc(reinterpret_cast<void*>(address), 4096,
+            if (void* p = VirtualAlloc(reinterpret_cast<void*>(address), TrampolineSize,
                                        MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE)) return p;
         }
         address = std::max(address + 65536,
@@ -236,6 +243,25 @@ bool Install(unsigned char* image, std::uint64_t size) {
             return fail("Camera store signature differs (game version or conflicting patch)");
         }
     }
+    struct Hook { std::size_t offset, size; };
+    std::vector<Hook> hooks{{Sites[0], MainCode.size()}};
+    unsigned signatures = unsigned(std::count(rotation_patched.begin(), rotation_patched.end(), true));
+    // The exact VEX encoding/count is a second signature for this routine. Each
+    // match is independently decoded before copying it to a trampoline. Only
+    // r13-relative scalar stores are relocated; no RIP-relative operands/branches.
+    for (std::size_t offset = FunctionBegin; offset + 9 <= FunctionEnd; ++offset) {
+        const auto* p = image + offset;
+        if (!StoreInstruction(p)) continue;
+        if (p[0] == 0xc4 && p[1] == 0xc1 && p[2] == 0x7a && p[3] == 0x11 &&
+            StoreInstruction(p, true)) ++signatures;
+        hooks.push_back({offset, 9});
+        offset += 8;
+    }
+    if (signatures != ExpectedStoreSignatures || hooks.size() > 65) {
+        std::fprintf(stderr, "Mouse camera: camera routine has %u store signatures, expected %u (%zu live stores)\n",
+                     signatures, ExpectedStoreSignatures, hooks.size() - 1);
+        return fail("Camera response signature differs (details in the game log)");
+    }
     unsigned a, b, c, d;
     __cpuid(1, a, b, c, d);
     if (!(c & (1u << 27))) return fail("OS extended register state is unavailable");
@@ -246,16 +272,16 @@ bool Install(unsigned char* image, std::uint64_t size) {
     if (b < 576 || b > 65536) return fail("Unsupported extended register state size");
     auto* memory = static_cast<unsigned char*>(AllocateNear(image, size));
     if (!memory) return fail("Cannot allocate nearby camera hook memory");
-    std::array<std::int32_t, Sites.size()> jumps{};
+    std::vector<std::int32_t> jumps(hooks.size());
     try {
-        Xbyak::CodeGenerator code(4096, memory);
+        Xbyak::CodeGenerator code(TrampolineSize, memory);
         using namespace Xbyak::util;
-        for (unsigned i = 0; i < Sites.size(); ++i) {
-            if (rotation_patched[i]) continue;
+        for (unsigned i = 0; i < hooks.size(); ++i) {
+            const auto hook = hooks[i];
             code.align(16);
             auto* start = code.getCurr();
             const auto displacement = reinterpret_cast<intptr_t>(start) -
-                                      reinterpret_cast<intptr_t>(image + Sites[i] + 5);
+                                      reinterpret_cast<intptr_t>(image + hook.offset + 5);
             if (displacement < INT32_MIN || displacement > INT32_MAX) throw Xbyak::Error(Xbyak::ERR_OFFSET_IS_TOO_BIG);
             jumps[i] = std::int32_t(displacement);
             Xbyak::Label original, done;
@@ -281,19 +307,19 @@ bool Install(unsigned char* image, std::uint64_t size) {
             code.lea(rsp, ptr[rsp + 128]);
             if (!i) {
                 Bridge(code, b, mask);
-                code.db(image + Sites[i], MainCode.size());
+                code.db(image + hook.offset, hook.size);
             }
             code.jmp(done, Xbyak::CodeGenerator::T_NEAR);
             code.L(original);
             code.pop(rax); code.popfq();
             code.lea(rsp, ptr[rsp + 128]);
-            code.db(image + Sites[i], i ? 9 : MainCode.size());
+            code.db(image + hook.offset, hook.size);
             code.L(done);
-            code.jmp(image + Sites[i] + (i ? 9 : MainCode.size()));
+            code.jmp(image + hook.offset + hook.size);
         }
         code.ready();
         DWORD old;
-        if (!VirtualProtect(memory, 4096, PAGE_EXECUTE_READ, &old)) {
+        if (!VirtualProtect(memory, TrampolineSize, PAGE_EXECUTE_READ, &old)) {
             VirtualFree(memory, 0, MEM_RELEASE);
             return fail("Cannot protect camera hook memory");
         }
@@ -302,21 +328,21 @@ bool Install(unsigned char* image, std::uint64_t size) {
         VirtualFree(memory, 0, MEM_RELEASE);
         return fail("Cannot generate camera hooks");
     }
-    // All five sites were validated first. The loader owns writable image pages
+    // All sites were validated first. The loader owns writable image pages
     // and has not entered guest code, so the patch cannot race execution.
-    for (unsigned i = 0; i < Sites.size(); ++i) {
-        if (rotation_patched[i]) continue;
-        auto* p = image + Sites[i];
+    for (unsigned i = 0; i < hooks.size(); ++i) {
+        const auto hook = hooks[i];
+        auto* p = image + hook.offset;
         p[0] = 0xe9;
         std::memcpy(p + 1, &jumps[i], 4);
-        std::memset(p + 5, 0x90, (i ? 9 : MainCode.size()) - 5);
-        FlushInstructionCache(GetCurrentProcess(), p, i ? 9 : MainCode.size());
+        std::memset(p + 5, 0x90, hook.size - 5);
+        FlushInstructionCache(GetCurrentProcess(), p, hook.size);
     }
     monocular_base = reinterpret_cast<uintptr_t>(image) + 0x553e8d0;
     problem = nullptr;
     available.store(true, std::memory_order_release);
-    std::printf("Mouse camera: verified startup hooks ready (F4); %u existing rotation-patch sites preserved; no polling thread\n",
-        unsigned(std::count(rotation_patched.begin(), rotation_patched.end(), true)));
+    std::printf("Mouse camera: verified startup hooks ready (F4); %zu response stores bypassed, %u existing rotation-patch sites preserved; no polling thread\n",
+        hooks.size() - 1, unsigned(std::count(rotation_patched.begin(), rotation_patched.end(), true)));
     return true;
 #else
     (void)image; (void)size;

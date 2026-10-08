@@ -6,6 +6,7 @@
 #include "test_assert.h"
 #include "test_platform.h"
 #include "sdl_window.h"
+#include "mouse_camera_fixture.h"
 #include <fstream>
 #include <sstream>
 #include <unordered_map>
@@ -245,14 +246,7 @@ int main() {
     auto* camera_image = static_cast<unsigned char*>(VirtualAlloc(nullptr, 0x5540000,
         MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
     assert(camera_image);
-    const unsigned char camera_loads[]{0xc4,0xc1,0x7a,0x10,0x85,0x40,1,0,0,
-                                       0xc4,0xc1,0x7a,0x10,0x8d,0x50,1,0,0};
-    std::memcpy(camera_image + 0x143ceaa, camera_loads, sizeof(camera_loads));
-    const unsigned char camera_store[]{0xc4,0xc1,0x7a,0x11,0x95,0x40,1,0,0};
-    for (auto offset : {0x143c6e8, 0x143c984, 0x143dde6, 0x143c870})
-        std::memcpy(camera_image + offset, camera_store, sizeof(camera_store));
-    const std::uint32_t rotation_state = 0x294;
-    std::memcpy(camera_image + 0x143c6e8 + 5, &rotation_state, 4);
+    CameraFixture::Populate(camera_image);
     camera_image[0x143c984] ^= 1;
     assert(!BbMouse::Install(camera_image, 0x5540000));
     ToastLayout(); // the actual long failure message, on its first visible frame

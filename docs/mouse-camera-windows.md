@@ -7,8 +7,9 @@ when it closes; F4 saves its toggle immediately. Opening the port menu, entering
 disabling the feature or losing focus releases capture and discards old motion. Lock-on
 uses the game's camera; binocular mode updates its separate angles at half sensitivity.
 
-This feature requires the matching Bloodborne 1.09 camera instructions. All five hook
-sites are checked before any code is changed. An unsupported image or a conflicting code
+This feature requires the matching Bloodborne 1.09 camera instructions. The angle-load
+hook, four auto-rotation sites and the camera routine's 29 original store signatures are
+checked before any code is changed. An unsupported image or a conflicting code
 patch leaves the image unchanged and displays a reason. Hooks are installed by the loader
 before guest execution, and F4 never rewrites executable instructions.
 
@@ -28,6 +29,27 @@ any hook is written. On a mismatch the game log records the image offset, bytes 
 decoded instruction. F4 notifications have a bounded width from their first frame, so
 long errors wrap horizontally and remain inside the game viewport.
 
+## Raw input and camera response
+
+Windows SDL relative mode uses [native Raw Input](https://github.com/libsdl-org/SDL/blob/release-3.4.0/src/video/windows/SDL_windowsmouse.c#L677).
+The port explicitly disables [system acceleration](https://wiki.libsdl.org/SDL3/SDL_HINT_MOUSE_RELATIVE_SYSTEM_SCALE),
+sets relative speed scaling to one and disables warp-generated motion, overriding
+inherited SDL hints. It consumes device deltas rather than cursor positions or virtual
+stick axes. Only mouse events belonging to the game window are accepted; synthetic
+touch and pen mouse events are ignored. Sensitivity is a constant multiplier, with no
+velocity curve, dead zone, time multiplier or smoothing filter.
+
+Earlier builds intercepted only the four **Disable Camera Auto Rotation via Movement**
+stores. The remaining angle stores in the camera update routine could still overwrite
+mouse results through the game's controller response and interpolation. The loader now
+discovers and gates the remaining scalar stores to the rotation and convergence fields
+in the supported routine, with a second signature check for its 29 original store encodings
+to the five main rotation fields.
+Higher-XMM-register variants are also decoded and gated. Capture disables these writes
+on idle frames as well, preventing them from adding a smoothing tail after the mouse
+stops. F4 off restores their original behavior through the hook gates; lock-on also
+retains the game's writes. Unrelated fields and other functions are left unchanged.
+
 ## Review of PR #3
 
 Reviewed [Supermedo/bloodborne_pc PR #3](https://github.com/Supermedo/bloodborne_pc/pull/3),
@@ -41,7 +63,7 @@ type. This prevents that snapshot from building as submitted.
 | --- | --- | --- |
 | Input | Extra thread samples every millisecond; SDL relative state is sampled outside its video thread | Raw SDL events on the window thread; no sampler thread or timer |
 | Camera writes | Worker writes a captured camera pointer concurrently with game execution | Accumulated motion is consumed on the guest camera thread, before its original angle loads |
-| Hook installation | Whole-process discovery, then live changes of five instruction sites on each toggle | Direct checks in the known loaded image; one startup installation, atomic toggle |
+| Hook installation | Whole-process discovery, then live changes of five instruction sites on each toggle | Main-load and complete camera-response store checks in the known loaded routine; one startup installation, atomic toggle |
 | Validation | Main instruction pattern checked; surrounding sites are copied without validating their instructions | Main loads checked byte for byte; stores decoded for size, camera base and allowed fields; exact bundled NOP patches preserved |
 | Guest CPU state | Added `test r13,r13` changes flags where the original loads did not | Flags, integer registers and complete OS-enabled XSAVE state are preserved around native calls |
 | Menu and focus | Worker gate stops updates, but opening the menu leaves relative capture enabled | Menu, text entry and focus transitions release relative mode and clear pending motion |
@@ -66,6 +88,10 @@ field offsets, loads, integer stores, RIP-relative instructions and partial NOP 
 must still fail without changing the image. The overlay test checks the long error and
 toggle notification layouts at 320x180, 640x360, 1280x720 and 2560x1440, including a nonzero
 viewport work-area origin.
+Every discovered store is executed with capture off, on and in lock-on, including 120
+idle camera updates. Missing response signatures reject the whole installation; unrelated
+fields and matching stores outside the routine remain unchanged. Packet sizes from 1 to
+900 counts produce equal angles, and idle updates add no rotation.
 Register checks include flags, MXCSR, a volatile integer register, the SysV red zone and
 both halves of an AVX register. The same 8,000-event stream produces equal rotation at 30/60/120/240 camera
 updates per second. The overlay test also checks that waiting for SDL events does not
@@ -76,6 +102,15 @@ and 2.3 microseconds per update with motion, including the test's ABI wrapper an
 binocular pointer checks. These are CPU microbenchmarks, not game FPS or end-to-end input
 latency measurements. The motion path executes at camera-update frequency, rather than
 on a 1,000 Hz worker. No native callback or pointer checks run on the idle hook path.
+The main-hook benchmark does not include the additional atomic gates at response stores.
+
+`raw-mouse-test` creates a real Win32/SDL window, checks native Raw Input device registration
+and confirms that inherited acceleration/scaling hints are overridden. It passes SDL
+events through the production window pump and checks constant sensitivity and synthetic
+device filtering. It also sends native mouse packets with `SendInput`: slow streams and
+single flicks with equal counts must produce equal angles through Windows, SDL and the
+camera callback. This test skips when desktop focus is unavailable; it does not change
+Windows pointer settings.
 
 No game dump is available in this workspace, so signature compatibility with an actual
 installation and gameplay behavior still require a playtest. In particular, compare

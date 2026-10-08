@@ -13,6 +13,12 @@
 namespace Frontend {
 
 WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}, height{height_} {
+    // Windows SDL relative mode uses native Raw Input. Keep its device counts
+    // unscaled even if inherited SDL environment hints enable pointer acceleration.
+    SDL_SetHintWithPriority(SDL_HINT_MOUSE_RELATIVE_SYSTEM_SCALE, "0", SDL_HINT_OVERRIDE);
+    SDL_SetHintWithPriority(SDL_HINT_MOUSE_RELATIVE_SPEED_SCALE, "1", SDL_HINT_OVERRIDE);
+    SDL_SetHintWithPriority(SDL_HINT_MOUSE_RELATIVE_WARP_MOTION, "0", SDL_HINT_OVERRIDE);
+    SDL_SetHintWithPriority(SDL_HINT_MOUSE_EMULATE_WARP_WITH_RELATIVE, "0", SDL_HINT_OVERRIDE);
     // Gamepads are sampled by runtime_pad.c; their events are pumped here with the window's.
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         UNREACHABLE_MSG("Failed to initialize SDL video: {}", SDL_GetError());
@@ -149,7 +155,9 @@ bool WindowSDL::PollEvents() {
             }
             BbOverlay::ShowMouseCamera(BbSettings::Get().mouse_camera);
         }
-        if (event.type == SDL_EVENT_MOUSE_MOTION && mouse_captured && !text_active &&
+        if (event.type == SDL_EVENT_MOUSE_MOTION && event.motion.windowID == SDL_GetWindowID(window) &&
+            event.motion.which != SDL_TOUCH_MOUSEID && event.motion.which != SDL_PEN_MOUSEID &&
+            mouse_captured && !text_active &&
             !BbOverlay::CapturesInput()) {
             BbMouse::Motion(event.motion.xrel, event.motion.yrel);
         }
@@ -206,6 +214,7 @@ void WindowSDL::UpdateMouseCapture() {
     if (desired != mouse_captured) {
         BbMouse::SetActive(false); // flush stale deltas before SDL changes capture
         if (SDL_SetWindowRelativeMouseMode(window, desired)) mouse_captured = desired;
+        else LOG_ERROR(Frontend, "Cannot change raw mouse capture: {}", SDL_GetError());
     }
     BbMouse::SetActive(desired && mouse_captured);
 }
