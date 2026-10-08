@@ -34,6 +34,8 @@ HIGHLIGHTS
 - Unlocked FPS, configurable frame cap, sharpening and individual effect toggles.
 - In-game settings, mod ordering, XML patches, camera tweaks and optional cheats.
 - Launcher interface in 13 languages, updates, session logs and local crash dumps.
+- Respawn loading: removes the death-triggered 12-second minimum loading timer
+  while preserving resource and character readiness checks.
 
 DLSS availability is checked at runtime. FSR 4 needs matching shader assets;
 Download FSR 4 assets is on Graphics. FSR 4.1.1 uses a prepared fsr4_411 folder,
@@ -158,7 +160,9 @@ is controllable. After a death, press F8 when the loading screen appears, then F
 when the respawned character is controllable. Repeat for two deaths and close the game.
 Send the loading-*.zip from logs\ under the port's data folder.
 This compares native process/thread CPU and logical I/O counters with existing frame,
-GPU readback and wait logs. It measures the delay; it does not apply a respawn fix.
+GPU readback and wait logs. The tracing script observes loading; the Windows
+loader applies the 1.09 minimum-delay fix by default. For a comparison with the
+original timer, add BB_RESPAWN_DELAY_FIX=0 in Advanced environment overrides.
 Diagnostic logging can affect timings; use the same mode for both loading paths.
 The report includes logs and paths, but does not copy saves, settings or game assets.
 

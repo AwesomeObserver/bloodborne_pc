@@ -14,6 +14,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #include "crash_win.h"
+#include "respawn_patch.h"
 #else
 #include <sys/mman.h>
 #include <malloc.h>
@@ -674,6 +675,19 @@ int main(int argc, char **argv) {
     }
     if (patch_file) apply_patches(patch_file, segments, ns, relocs, nr);
 #ifdef _WIN32
+    if (!cpu_only) {
+        const char *respawn_fix = getenv("BB_RESPAWN_DELAY_FIX");
+        if (respawn_fix && !strcmp(respawn_fix, "0")) {
+            puts("Respawn loading: original minimum delay requested (BB_RESPAWN_DELAY_FIX=0)");
+        } else {
+            int patched = bb_patch_respawn_delay(image, (size_t)size);
+            if (patched == BB_RESPAWN_APPLIED || patched == BB_RESPAWN_ALREADY_APPLIED)
+                printf("Respawn loading: 12-second minimum delay removed%s; readiness checks preserved\n",
+                       patched == BB_RESPAWN_ALREADY_APPLIED ? " (already patched)" : "");
+            else
+                puts("Respawn loading: unsupported or modified instructions; minimum-delay fix skipped");
+        }
+    }
     printf("Guest TCB loads redirected to the TEB TLS slot: %" PRIu64 "\n", patch_tcb_loads(segments, ns));
 #endif
     if (!cpu_only) bbgpu_patch_image(image, size);

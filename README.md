@@ -44,6 +44,7 @@ Python installation is needed.
 | **In-game settings** | **Insert / L3 + R3**. Mouse navigation, supported live changes, saved configuration and restart controls. |
 | **Mods & gameplay tweaks** | Mod ordering, external XML patches, camera tweaks and optional cheats. Source game files stay intact. |
 | **Windows launcher** | **13 languages**, updates that preserve saves/settings/mods, direct shortcuts, shader-cache cleanup, session logs and local crash dumps. |
+| **Respawn loading** | Removes the original death-triggered **12-second minimum loading timer**, retaining resource and character readiness checks. |
 
 Feature availability is checked at runtime. FSR 4 variants also need their matching
 shader assets. DLSS presets A–D are legacy requests that current DLLs may substitute;
@@ -119,7 +120,7 @@ port's data folder. **Advanced → Save session log** enables additional session
 - [Windows crash analysis](docs/crash-analysis-windows-v1.5.md)
 - [October 8 gameplay crash investigation](docs/crash-analysis-2026-10-08.md)
 - [Vulkan command-data crash and missing dump fix](docs/crash-analysis-2026-10-09.md)
-- [Respawn loading investigation and capture](docs/respawn-loading-windows.md)
+- [Respawn loading fix and timing capture](docs/respawn-loading-windows.md)
 
 ## Credits & license
 

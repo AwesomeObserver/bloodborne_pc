@@ -3,9 +3,60 @@
 The initial estimate was **3–4 seconds after death**; the first marked capture
 measures **13.84 seconds**. Loading through **Continue** is faster; teleportation
 does not show the reported delay.
-The cause has **not yet been established**. The first capture confirms a long quiet
-interval between resource-loading bursts; it does not identify the game instruction
-responsible for it. No respawn performance fix is claimed.
+The supplied 1.09 executable contains a **12-second minimum loading timer** enabled
+by the player-death flag. This explains a concrete difference between respawn and
+Continue and closely matches the quiet interval in both captures. The Windows
+loader now removes that minimum while retaining the game's readiness checks.
+Post-fix gameplay timings still need confirmation; neither capture used this fix.
+
+## Executable analysis and fix
+
+The supplied `eboot.bin` reconstructs to the supported CUSA03173 1.09 loaded image,
+SHA-256 `071df19c8880086d97182dbc057bc8cb37badaca57d9112683836b24a0444c0a`.
+Addresses below are offsets in that loaded image, not offsets in the SELF file.
+
+| Offset | Observed behavior |
+| --- | --- |
+| `0x18c4cb7` | The player branch of the character death handler sets `GameMan + 0x1522`. |
+| `0x1944c20` | The map transition copies that flag into its request at `+0x94`. Subsequent copies place it at world-step `+0xe4`. |
+| `0x1938b59` | Loading initialization tests the flag. If set, it loads **12.0 seconds** from `0x49280c8`; otherwise it uses zero. The countdown is stored at world-step `+0x278`. |
+| `0x19387d9` | The world-step update decreases the countdown by frame delta time and clamps it at zero. |
+| `0x193a581` | Loading cannot advance while the countdown is positive. The next branch independently requires the characters to be ready. |
+
+The patch replaces only the eight-byte float-load instruction at `0x1938b64`
+with a zeroing instruction and padding. It runs once, after selected XML patches
+and before guest memory protection/execution. It changes the in-memory executable;
+it does not edit the source `eboot.bin` or require preparation-cache deletion.
+
+The loader checks the full initialization block, the countdown/readiness branches
+and the original 12.0 constant before writing. Modified or unsupported instructions
+cause a logged skip with no writes. Reapplying the same patch is harmless.
+The death flag itself, the death presentation, resource-loading steps, character
+readiness and the separate **15-second multiplayer timeout** remain unchanged.
+There is no per-frame host hook or added gameplay polling.
+
+Enabled by default. The game log reports:
+
+```text
+Respawn loading: 12-second minimum delay removed; readiness checks preserved
+```
+
+For an original-behavior comparison, put `BB_RESPAWN_DELAY_FIX=0` in the launcher's
+Advanced environment overrides, restart, and remove it to enable the fix again.
+Actual loading can still take time when resources are not ready; no new respawn
+duration is promised before a gameplay comparison.
+
+The native regression executes the original and patched initialization instructions
+and the retained readiness branches through a Windows ABI adapter. It verifies
+both death-flag values, the unchanged 15-second timeout, neighboring state, rejection
+of truncated or modified images, an eight-byte-only change and repeat application.
+It also passed against the supplied loaded image. A local replay is unavailable
+because the other game assets are not present.
+
+Validation: **34 native checks passed**, with one DLSS Frame Generation capability
+check skipped. Loader integration also passed for default application, explicit
+disable, conflicting instructions and an identical external XML write. None of
+the 61 literal built-in 1.09 XML patches overlaps the guarded locations.
 
 ## First capture: October 9
 
@@ -52,10 +103,8 @@ three per thread, while retaining approximately 100 ms counter samples and 10 ms
 marker polling. Maximum sampler call duration is recorded as well. New threads can
 take up to one census interval, approximately 500 ms, to appear in the report.
 
-Further code-level investigation needs the matching decrypted **`eboot.bin` from
-game version 1.09**. The report contains guest offsets, but no instructions at those
-offsets; the executable is unavailable in this workspace. An entire game directory
-or save data is not needed for that analysis.
+The reports contain guest offsets but no instructions. The executable supplied
+after these captures enabled the code analysis described above.
 
 ## Second capture: optimized collector
 
@@ -88,9 +137,8 @@ clock seconds 50–60, the loading screen submits 240 flips per two-second windo
 approximately 170 draws per flip, and no frame longer than 9.31 ms. All logged GPU
 buffer readbacks together take 69.725 ms over the session. The guest wait table
 again reaches 512 entries in its first window. These findings strengthen the
-previous conclusion but do not identify a safe game code change. No additional
-capture or timing bypass is proposed at this stage; the matching game executable
-is still needed to examine the guest instructions.
+previous conclusion. The counters alone did not identify a safe code change;
+the subsequent executable analysis isolated the minimum timer.
 
 ## What was checked
 
@@ -101,9 +149,8 @@ is still needed to examine the guest instructions.
 - Reusing or unmapping GPU resources can drain recording work and perform readbacks.
   These paths exist in `Rasterizer::InvalidateMemory`, `Rasterizer::UnmapMemory` and
   `BufferCache::ReadMemory`. Their presence does not show that they cause this report.
-- The capture is available, but the game executable and a local session for replay
-  are unavailable. The host code and aggregated counters cannot identify the guest
-  instruction responsible for the pause.
+- The supplied executable was analyzed directly. Other game assets and a local
+  session for replay are unavailable, so before/after gameplay timing is pending.
 
 ## Capture a comparison
 

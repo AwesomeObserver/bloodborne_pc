@@ -348,6 +348,10 @@ set(BB_TEST_TARGETS motion-history-test motion-shader-test ui-composition-test s
     scene-resolution-test taa-shader-test camera-motion-test upscaler-support-test command-dispatch-test record-data-test)
 if (WIN32)
     # Exercise the actual Windows HLE and SysV guest ABI, including virtual SDL input.
+    add_executable(respawn-patch-test EXCLUDE_FROM_ALL ../tests/test_respawn_patch.c)
+    target_include_directories(respawn-patch-test PRIVATE ../src)
+    target_compile_options(respawn-patch-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+    list(APPEND BB_TEST_TARGETS respawn-patch-test)
     add_executable(mouse-camera-test EXCLUDE_FROM_ALL ../tests/test_mouse_camera.cpp
         ../tests/test_gpu_runtime_stubs.cpp ../src/compat_win.c)
     target_include_directories(mouse-camera-test PRIVATE shim shadps4 third_party/xbyak)
