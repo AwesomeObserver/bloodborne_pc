@@ -56,6 +56,126 @@ static void check_movement_primary(PadData mapped, unsigned primary) {
     if (primary==8) assert(dx>0);
 }
 
+static void check_movement_turn(PadData before, PadData after) {
+    const int ax=(int)before.left_x-128, ay=(int)before.left_y-128;
+    const int bx=(int)after.left_x-128, by=(int)after.left_y-128;
+    const int dot=ax*bx+ay*by, cross=ax*by-ay*bx;
+    /* Adding or releasing one orthogonal direction must not cross 45 degrees
+     * in one delivered step. Keep full movement strength throughout. */
+    assert(dot>0 && abs(cross)<dot);
+    assert(bx*bx+by*by>=127*127 && bx*bx+by*by<=128*128);
+}
+
+static PadData keyboard_movement_at(bool *keys, unsigned held, uint64_t timestamp) {
+    movement_keys(keys,held);
+    PadData mapped={.left_x=128,.left_y=128,.right_x=17,.right_y=231,.timestamp=timestamp};
+    apply_keyboard(&mapped,keys,0);
+    assert(mapped.right_x==17 && mapped.right_y==231);
+    return mapped;
+}
+
+static void test_keyboard_release_handoff(void) {
+    bool keys[SDL_SCANCODE_COUNT]={0};
+    static const unsigned directions[]={1,2,4,8}, rates[]={30,60,90,120};
+    for (unsigned p=0;p<4;++p) for (unsigned s=0;s<4;++s) {
+        const unsigned primary=directions[p], secondary=directions[s];
+        if (!!(primary&3)==!!(secondary&3)) continue;
+        for (unsigned rate=0;rate<4;++rate) {
+            const uint64_t step=1000000/rates[rate], start=1000000;
+            keyboard_movement_at(keys,0,start);
+            PadData cardinal=keyboard_movement_at(keys,primary,start+step);
+            PadData diagonal=keyboard_movement_at(keys,primary|secondary,start+2*step);
+            check_movement_turn(cardinal,diagonal);
+            PadData handoff=keyboard_movement_at(keys,secondary,start+3*step);
+            check_movement_turn(diagonal,handoff); /* previous mapper exceeds 45 degrees here */
+            check_movement_primary(handoff,secondary);
+            /* Extra pad polls in the same update must retain the handoff. */
+            for (unsigned poll=0;poll<80;++poll) {
+                PadData burst=keyboard_movement_at(keys,secondary,start+3*step+poll*100);
+                assert(burst.left_x==handoff.left_x && burst.left_y==handoff.left_y);
+            }
+            PadData final=keyboard_movement_at(keys,secondary,start+4*step);
+            check_movement_turn(handoff,final);
+            assert(final.left_x==(secondary==4 ? 0 : secondary==8 ? 255 : 128));
+            assert(final.left_y==(secondary==1 ? 0 : secondary==2 ? 255 : 128));
+            for (unsigned frame=1;frame<120;++frame) {
+                PadData held=keyboard_movement_at(keys,secondary,start+(4+frame)*step);
+                assert(held.left_x==final.left_x && held.left_y==final.left_y);
+            }
+            /* Releasing the secondary returns to the original primary directly. */
+            keyboard_movement_at(keys,0,start);
+            keyboard_movement_at(keys,primary,start+step);
+            diagonal=keyboard_movement_at(keys,primary|secondary,start+2*step);
+            final=keyboard_movement_at(keys,primary,start+3*step);
+            check_movement_turn(diagonal,final);
+            assert(final.left_x==cardinal.left_x && final.left_y==cardinal.left_y);
+            /* No released-key inertia when all keys are lifted during handoff. */
+            keyboard_movement_at(keys,primary|secondary,start+4*step);
+            keyboard_movement_at(keys,secondary,start+5*step);
+            final=keyboard_movement_at(keys,0,start+5*step+1);
+            assert(final.left_x==128 && final.left_y==128);
+            /* A new direction cancels the old handoff immediately. */
+            keyboard_movement_at(keys,primary,start+6*step);
+            keyboard_movement_at(keys,primary|secondary,start+7*step);
+            keyboard_movement_at(keys,secondary,start+8*step);
+            final=keyboard_movement_at(keys,primary,start+8*step+1);
+            assert(final.left_x==cardinal.left_x && final.left_y==cardinal.left_y);
+        }
+    }
+    /* Expire exactly at the time limit, including high-frequency input reads. */
+    keyboard_movement_at(keys,0,10000);
+    keyboard_movement_at(keys,1,11000);
+    keyboard_movement_at(keys,9,12000);
+    PadData handoff=keyboard_movement_at(keys,8,13000);
+    PadData final=keyboard_movement_at(keys,8,21000);
+    check_movement_turn(handoff,final);
+    assert(final.left_x==255 && final.left_y==128);
+    /* Missing or discontinuous clocks cannot retain a released direction. */
+    keyboard_movement_at(keys,0,0);
+    keyboard_movement_at(keys,1,0);
+    keyboard_movement_at(keys,9,0);
+    check_movement_primary(keyboard_movement_at(keys,8,0),8);
+    final=keyboard_movement_at(keys,8,0);
+    assert(final.left_x==255 && final.left_y==128);
+    keyboard_movement_at(keys,1,11000);
+    keyboard_movement_at(keys,9,12000);
+    keyboard_movement_at(keys,8,13000);
+    final=keyboard_movement_at(keys,8,12999);
+    assert(final.left_x==255 && final.left_y==128);
+    /* Opposing keys cancel even when their addition leaves the resolved
+     * direction unchanged during a handoff (D -> W+S+D). */
+    keyboard_movement_at(keys,1,22000);
+    keyboard_movement_at(keys,9,23000);
+    keyboard_movement_at(keys,8,24000);
+    final=keyboard_movement_at(keys,11,24001);
+    assert(final.left_x==255 && final.left_y==128);
+    /* Releasing keyboard input hands native axes back without a tail. */
+    keyboard_movement_at(keys,1,25000);
+    keyboard_movement_at(keys,9,26000);
+    keyboard_movement_at(keys,8,27000);
+    movement_keys(keys,0);
+    final=(PadData){.left_x=63,.left_y=211,.timestamp=27001};
+    apply_keyboard(&final,keys,0);
+    assert(final.left_x==63 && final.left_y==211);
+    /* Neither opening the menu nor reopening the pad can retain a handoff. */
+    keyboard_movement_at(keys,1,28000);
+    keyboard_movement_at(keys,9,29000);
+    keyboard_movement_at(keys,8,30000);
+    capture=1;
+    PadData menu;
+    assert(pad_read_state(1,&menu)==0 && menu.left_x==128 && menu.left_y==128);
+    capture=0;
+    final=keyboard_movement_at(keys,8,30001);
+    assert(final.left_x==255 && final.left_y==128);
+    keyboard_movement_at(keys,1,31000);
+    keyboard_movement_at(keys,9,32000);
+    keyboard_movement_at(keys,8,33000);
+    assert(pad_close(1)==0 && pad_open(1,0,0,NULL)==1);
+    final=keyboard_movement_at(keys,8,33001);
+    assert(final.left_x==255 && final.left_y==128);
+    keyboard_movement_at(keys,0,1);
+}
+
 static void test_keyboard_transition_order(void) {
     bool keys[SDL_SCANCODE_COUNT]={0};
     static const unsigned directions[]={1,2,4,8};
@@ -282,6 +402,7 @@ int main(void) {
     assert(bindings[IN_CROSS].key_count==2 && bindings[IN_CROSS].keys[0]==SDL_SCANCODE_X &&
            bindings[IN_CROSS].keys[1]==SDL_SCANCODE_SPACE);
     test_keyboard_movement(joystick);
+    test_keyboard_release_handoff();
     test_keyboard_transition_order();
     /* Capture-helper names round-trip through the actual INI parser and pad ABI. */
     FILE *mouse_config=fopen(config,"w");
@@ -323,6 +444,9 @@ int main(void) {
      * bound or keyboard-bound vertical action. The held action retains priority. */
     mapped=(PadData){.left_x=128,.left_y=128};
     apply_keyboard(&mapped,keyboard,0);
+    assert(mapped.left_x==219 && mapped.left_y==38); /* mouse-bound primary release */
+    mapped=(PadData){.left_x=128,.left_y=128};
+    apply_keyboard(&mapped,keyboard,0);
     assert(mapped.left_x==255 && mapped.left_y==128);
     mapped=(PadData){.left_x=128,.left_y=128};
     apply_keyboard(&mapped,keyboard,SDL_BUTTON_LMASK);
@@ -350,5 +474,5 @@ int main(void) {
     SDL_Quit();
     unlink(path);
     unlink(config);
-    puts("PASS: pad ABI, near-full keyboard diagonals, all eight transition orders, stable held-axis priority, exhaustive mixed input in both orders, opposing keys, menu/session resets, native/remapped input, debug camera chord, left/right clicks, SDL touch coordinates, overlay capture, controls");
+    puts("PASS: pad ABI, near-full keyboard diagonals, all eight transition orders, stable held-axis priority, bounded primary-release handoffs, immediate stops and cancellations, exhaustive mixed input in both orders, opposing keys, menu/session resets, native/remapped input, debug camera chord, left/right clicks, SDL touch coordinates, overlay capture, controls");
 }

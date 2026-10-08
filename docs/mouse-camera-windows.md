@@ -167,6 +167,8 @@ enable F4 and move the mouse once to start recording. In an open area, hold W fo
 while looking around, then turn F4 off and repeat the movement combinations.
 Also compare the reverse key order: start with A or D, then add W or S and hold
 each combination for about 3 seconds.
+While holding a diagonal, release the first key and keep the second held for
+3 seconds: W -> W+D -> D, then D -> D+W -> W. Repeat with A and S.
 Close the game to collect the ZIP. This procedure captures both sides of the F4
 comparison; collecting a report does not fix movement.
 

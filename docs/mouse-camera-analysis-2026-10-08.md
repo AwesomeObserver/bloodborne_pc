@@ -140,7 +140,7 @@ starting directions.
 
 ## Held-axis preference and validation limits
 
-The mapping now remembers the resolved digital direction at each pad read.
+Commit `a9b9911` remembers the resolved digital direction at each pad read.
 Adding an orthogonal direction retains the already-held axis as primary. That
 axis wins equal-error integer rounding choices, giving `(90,91)` offsets for a
 vertical start and `(91,90)` for a horizontal start. Both have squared magnitude
@@ -162,8 +162,53 @@ Exhaustive bounds checks cover 1966080 mixed keyboard/controller samples across
 both starting-axis histories. These checks validate input values and stability;
 they do not execute character animation or level physics.
 
-Gameplay confirmation of the horizontal-first correction is still required.
-If needed, a V2 report should include both key orders and physical-controller
-movement in the same open area, with F4 enabled and mouse ownership established
-before both cases. Keep the right stick neutral so it does not return rotation
-to the native camera. Private reports and captured game code are not distributed.
+The user confirmed that adding a second direction now works in both axis orders.
+A jerk remains when releasing the first key and continuing along the other axis,
+for example W -> W+D -> D or D -> D+W -> W.
+
+## Primary-key release handoff, 2026-10-09
+
+The remaining transition changes direction by approximately 45.317 degrees in one
+pad sample. Its angle is slightly larger than the successful 44.683-degree entry
+into a diagonal. A single rounded diagonal cannot put both transitions below
+45 degrees. The character's animation-sector implementation is still unavailable;
+the input angle is verified, while its connection to the gameplay jerk is a
+hypothesis supported by the preceding feedback.
+
+On primary-key release, the mapper briefly swaps the diagonal's component priority
+toward the remaining axis before returning to its full cardinal value:
+
+| W -> W+D -> D | X/Y delivered to the game |
+| --- | --- |
+| W | 128 / 0 |
+| W+D | 218 / 37 |
+| Release W: handoff toward D | 219 / 38 |
+| D after handoff | 255 / 128 |
+
+This splits the release turn into approximately 0.633 and 44.683 degrees. Both
+diagonal samples have identical squared magnitude 16381, so this step does not
+reduce stick strength or insert neutral input. The same rule handles all eight
+ordered orthogonal pairs, including horizontal-first movement.
+
+The handoff expires on the first pad poll at least 8000 microseconds after release,
+using the existing monotonic input timestamp. Extra polls within that interval
+retain the same intermediate sample. This introduces a short directional delay
+only when releasing the primary key; it adds no general movement filter. Releasing
+the secondary key returns to the original cardinal immediately. Releasing all
+movement keys, changing direction, opposing-key cancellation, menu capture or
+pad reopen cancels the handoff immediately. Without a timestamp, it lasts one
+poll; a backwards clock also expires it. Controller-only input and raw mouse
+camera code remain unchanged. No extra clock call, worker or allocation is needed.
+
+The previous mapper fails the new primary-release angle regression. The updated
+test checks all eight orders at 30/60/90/120 input updates per second, repeated
+polls during the handoff, the exact expiry boundary, held-state stability,
+immediate stops, new directions, opposing keys, remapped mouse/keyboard actions,
+native-axis return and menu/session resets. The existing 1966080 mixed-input
+bounds cases also pass. These checks validate delivered input; gameplay confirmation
+of the release correction is still needed.
+
+If another report is needed, include W -> W+D -> D and D -> D+W -> W, their
+mirrors, and physical-controller movement in the same open area. Enable F4 and
+establish mouse ownership first; keep the right stick neutral. Private reports
+and captured game code are not repository or package assets.

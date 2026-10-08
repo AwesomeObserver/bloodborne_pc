@@ -268,9 +268,15 @@ static int pad_value(SDL_Gamepad *g, int input) {
 static uint8_t key_axis(uint8_t value, int negative, int positive) {
     return negative || positive ? (uint8_t)(128-(negative ? 128 : 0)+(positive ? 127 : 0)) : value;
 }
-/* Only resolved digital directions, updated under the pad lock. Retain the
- * first held axis when a second is added; no timer or temporal filtering. */
-static struct { int x, y, horizontal; } key_movement_state;
+/* Resolved digital directions, updated under the pad lock. Retain the first
+ * held axis, then briefly favor the remaining axis when that first key lifts.
+ * The existing input timestamp keeps repeated polls on the same handoff. */
+enum { KEY_MOVEMENT_HANDOFF_US=8000 };
+static struct {
+    int x, y, horizontal;
+    int handoff_x, handoff_y, handoff;
+    uint64_t handoff_started;
+} key_movement_state;
 static void reset_key_movement(void) { memset(&key_movement_state,0,sizeof(key_movement_state)); }
 
 /* Use the nearest representable direction inside the final 8-bit stick circle.
@@ -280,13 +286,39 @@ static void reset_key_movement(void) { memset(&key_movement_state,0,sizeof(key_m
  * Controller-only samples remain untouched. */
 static void key_movement(PadData *d, int left, int right, int up, int down) {
     const int key_x=(right!=0)-(left!=0), key_y=(down!=0)-(up!=0);
+    if (!(left || right || up || down)) { reset_key_movement(); return; }
+    const int changed=key_x!=key_movement_state.x || key_y!=key_movement_state.y;
+    if (changed) {
+        key_movement_state.handoff=0;
+        /* Releasing the primary used to jump 45.317 degrees straight to the
+         * remaining cardinal. Swap the two diagonal components first: this
+         * preserves strength and splits that turn into 0.633 and 44.683 degrees.
+         * Opposing held keys must still cancel their axis immediately. */
+        if (key_movement_state.x && key_movement_state.y &&
+            (key_movement_state.horizontal
+             ? !left && !right && key_y==key_movement_state.y
+             : !up && !down && key_x==key_movement_state.x)) {
+            key_movement_state.handoff=1;
+            key_movement_state.handoff_x=key_movement_state.x;
+            key_movement_state.handoff_y=key_movement_state.y;
+            key_movement_state.handoff_started=d->timestamp;
+        }
+    } else if (key_movement_state.handoff &&
+               (!d->timestamp || d->timestamp<key_movement_state.handoff_started ||
+                d->timestamp-key_movement_state.handoff_started>=KEY_MOVEMENT_HANDOFF_US)) {
+        key_movement_state.handoff=0;
+    }
+    if ((left && right) || (up && down)) key_movement_state.handoff=0;
     if (!key_x || !key_y) key_movement_state.horizontal=key_x!=0;
     else if (key_movement_state.horizontal ? key_x!=key_movement_state.x : key_y!=key_movement_state.y)
         key_movement_state.horizontal=key_x==key_movement_state.x;
     key_movement_state.x=key_x; key_movement_state.y=key_y;
-    if (!(left || right || up || down)) return;
     int x=left || right ? key_x*128 : (int)d->left_x-128;
     int y=up || down ? key_y*128 : (int)d->left_y-128;
+    if (key_movement_state.handoff) {
+        x=key_movement_state.handoff_x*128;
+        y=key_movement_state.handoff_y*128;
+    }
     const int length2=x*x+y*y;
     if (length2>128*128) {
         const float scale=128.0f/SDL_sqrtf((float)length2);

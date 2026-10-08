@@ -61,8 +61,10 @@ On Controls, click a binding and press a key, mouse button, wheel direction or
 controller button/trigger. + adds an alternative; Clear removes bindings.
 Close the capture window to cancel. Remaps apply at the next game launch.
 
-Movement keys use a circular stick range. Adding A/D while holding W changes
-direction without a jump in stick strength. Opposite movement keys cancel.
+Movement keys use a circular stick range. Adding a strafe key retains the held
+axis. Releasing the first key uses an 8 ms directional handoff at full stick
+strength. Releasing all movement keys stops keyboard input immediately.
+Opposite movement keys cancel.
 
 The launcher and in-game menu expose mouse sensitivity and invert Y. Opening the
 port menu, name entry or switching windows releases capture. Lock-on uses the
@@ -132,6 +134,8 @@ Sustained diagonal movement diagnostics: run Trace Keyboard Movement.cmd.
 After loading, enable F4 and move the mouse once. Hold W for 3 seconds,
 W+A for 5 seconds, then W+D for 5 seconds without moving the mouse.
 Also start with A or D, then add W or S and hold each combination for 3 seconds.
+Release the first key while keeping the second held: W -> W+D -> D, then
+D -> D+W -> W, holding each step for 3 seconds. Repeat with A and S.
 Repeat while looking around, then disable F4 and repeat W/W+A/W+D.
 Close the game and send the mouse-camera ZIP from logs\.
 The V2 report records final pad state, camera bases and follow vectors together.
@@ -139,8 +143,11 @@ For a controller comparison, leave F4 enabled and move the mouse once before
 repeating the same movement directions with the left stick. Keep the right stick neutral.
 Diagonal rounding now preserves whichever movement axis was already held.
 W/S-first and A/D-first diagonals retain the same near-full stick strength.
-No movement smoothing or input delay is added. The raw mouse camera is unchanged.
-Confirmation of the horizontal-first gameplay correction is pending.
+On primary-key release, a brief handoff preserves strength and splits the turn
+into two smaller steps. It expires after 8 ms on the next input poll; stopping,
+changing direction, opposite keys and menu capture cancel it immediately.
+The user confirmed that adding a strafe key works in either axis order.
+The release correction needs gameplay confirmation. Raw mouse camera is unchanged.
 
 GNU GPL v2 or later. See LICENSE, licenses\ and README.md for third-party credits.
 Not affiliated with Sony Interactive Entertainment or FromSoftware.
