@@ -95,6 +95,7 @@ int main() {
     const auto pattern = [](float x, float y) {
         return .5f + .2f * std::sin(x * 1.8f) + .2f * std::cos(y * 1.6f);
     };
+    std::array<u64, 14> fingerprints{};
     const auto run = [&](float sign, u32 preset, u32 frames) {
         auto cmd = scheduler.CommandBuffer();
         const Vulkan::Dlss::FeatureDesc desc{W, H, OW, OH, 3, false, preset};
@@ -161,6 +162,13 @@ int main() {
             scheduler.Finish();
         }
         const auto *pixels = static_cast<u16 *>(ai.pMappedData);
+        u64 fingerprint = 14695981039346656037ull;
+        for (u32 p = 0; p < OW * OH; ++p)
+            for (u32 c = 0; c < 3; ++c) {
+                fingerprint ^= pixels[p * 4 + c];
+                fingerprint *= 1099511628211ull;
+            }
+        fingerprints[preset] = fingerprint;
         double error = 0;
         u32 samples = 0;
         for (u32 y = 16; y < OH - 16; ++y)
@@ -172,8 +180,9 @@ int main() {
                 ++samples;
             }
         error /= samples;
-        std::printf("DLSS preset %s, viewport jitter sign %+.0f: MSE %.8f\n",
-                    BbSettings::DlssPresetName(preset), sign, error);
+        std::printf("DLSS preset %s, viewport jitter sign %+.0f: MSE %.8f, RGB %016llx\n",
+                    BbSettings::DlssPresetName(preset), sign, error,
+                    static_cast<unsigned long long>(fingerprint));
         return error;
     };
     const auto positive = run(1, 0, 40), negative = run(-1, 0, 40);
@@ -181,19 +190,17 @@ int main() {
     // A positive viewport shift is the production convention. Incorrect jitter
     // must measurably lose detail rather than silently regress to blurry output.
     assert(positive < .002 && positive < negative * .25);
-    std::array<double, 14> errors{};
     for (int preset : BbSettings::DlssPresets) {
         const double error = run(1, u32(preset), 8);
         // These exercise the real DLL, including its handling of legacy hints.
         // A finite, reconstructed output rules out a successful-but-empty dispatch.
         assert(std::isfinite(error) && error < .02);
-        errors[preset] = error;
     }
     // Changing only the cached descriptor while still passing hint 0 to NGX must
     // fail this test: the CNN and transformer selections need distinct output.
-    assert(std::abs(errors[6] - errors[11]) > 1e-7);
-    assert(std::abs(errors[11] - errors[13]) > 1e-7);
-    assert(std::abs(errors[13] - errors[12]) > 1e-7);
+    assert(fingerprints[6] != fingerprints[11]);
+    assert(fingerprints[11] != fingerprints[13]);
+    assert(fingerprints[13] != fingerprints[12]);
     std::puts("PASS: real NGX reconstruction and live model preset switching");
     dlss->ReleaseFeature();
     vmaDestroyBuffer(instance.GetAllocator(), staging, allocation);
