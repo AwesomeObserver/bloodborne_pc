@@ -24,7 +24,7 @@ class WindowsLauncherTests(unittest.TestCase):
         self.assertEqual(env['BB_SAVE_LOG'], '1')
         self.assertEqual(env['BB_FSR411_DIR'], 'D:/my assets/fsr4_411')
 
-    def test_controls_page_selection_and_persistence(self):
+    def test_pages_selection_and_persistence(self):
         try:
             import tkinter as tk
             from tkinter import ttk, filedialog, messagebox
@@ -38,6 +38,7 @@ class WindowsLauncherTests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as directory:
                 data = Path(directory)
+                (data / 'bbport.ini').write_text('dlss_preset=k\n', encoding='utf-8')
                 result = subprocess.CompletedProcess([], 0, 'guid-one\tVirtual pad\n', '')
                 with patch.object(launcher, 'DATA_DIR', data), \
                      patch.object(launcher, 'CONFIG_DIR', data), \
@@ -59,6 +60,22 @@ class WindowsLauncherTests(unittest.TestCase):
                     self.assertEqual(app.gamepad_box.current(), 1)
                     app.reset_controls()
                     self.assertEqual(app.var('key.cross', 'ini').get(), 'Space')
+                    app.show('graphics')
+                    root.update_idletasks()
+                    self.assertEqual(app.var('dlss_preset', 'ini').get(), 'K')
+                    self.assertTrue(app.dlss_preset_box.instate(['disabled']))
+                    app.var('upscaler', 'ini').set('dlss')
+                    self.assertTrue(app.dlss_preset_box.instate(['readonly', '!disabled']))
+                    for index, (preset, _label) in enumerate(launcher.DLSS_PRESETS):
+                        app.dlss_preset_box.current(index)
+                        app.dlss_preset_box.event_generate('<<ComboboxSelected>>')
+                        self.assertEqual(app.var('dlss_preset', 'ini').get(), preset)
+                        app.collect()
+                        self.assertIn(f'dlss_preset={preset}\n',
+                                      (data / 'bbport.ini').read_text(encoding='utf-8'))
+                    app.var('upscaler', 'ini').set('fsr3')
+                    self.assertTrue(app.dlss_preset_box.instate(['disabled']))
+                    self.assertEqual(app.var('dlss_preset', 'ini').get(), 'L')
         finally:
             root.destroy()
 

@@ -26,6 +26,7 @@ int main() {
     assert(write(fd, ini, sizeof(ini) - 1) == ssize_t(sizeof(ini) - 1));
     close(fd);
     setenv("BB_CONFIG", path, 1);
+    unsetenv("BB_DLSS_PRESET");
 
     BbSettings::Load();
     auto& s = BbSettings::Get();
@@ -51,6 +52,29 @@ int main() {
     BbSettings::Load();
     assert(s.menu_x == 0.625f && s.menu_y == 0.125f && s.upscaler == BbSettings::UpscalerFsr411);
     assert(s.frame_generation == BbSettings::FrameGenerationDlss);
+    const int quality = s.preset;
+    for (int preset : BbSettings::DlssPresets) {
+        s.dlss_preset = preset;
+        BbSettings::Save();
+        assert(Read(path).find(std::string("dlss_preset=") + BbSettings::DlssPresetName(preset) +
+                               "\n") != std::string::npos);
+        s.dlss_preset = -1;
+        BbSettings::Load();
+        assert(s.dlss_preset == preset && s.preset == quality);
+    }
+    setenv("BB_DLSS_PRESET", " k ", 1);
+    BbSettings::Load();
+    assert(s.dlss_preset == 11);
+    setenv("BB_DLSS_PRESET", "13", 1);
+    BbSettings::Load();
+    assert(s.dlss_preset == 13);
+    setenv("BB_DLSS_PRESET", "7", 1); // Reserved NGX hints must never be submitted.
+    BbSettings::Load();
+    assert(s.dlss_preset == 0);
+    setenv("BB_DLSS_PRESET", "invalid", 1);
+    BbSettings::Load();
+    assert(s.dlss_preset == 0);
+    unsetenv("BB_DLSS_PRESET");
     unlink(path);
-    std::puts("PASS: settings save keeps other keys, menu position");
+    std::puts("PASS: settings persistence, DLSS model presets and environment validation");
 }

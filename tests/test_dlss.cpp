@@ -9,6 +9,7 @@
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_dlss.h"
 #include "video_core/texture_cache/image.h"
+#include "bbport_settings.h"
 #include <vk_mem_alloc.h>
 #include "test_assert.h"
 
@@ -94,11 +95,19 @@ int main() {
     const auto pattern = [](float x, float y) {
         return .5f + .2f * std::sin(x * 1.8f) + .2f * std::cos(y * 1.6f);
     };
-    const auto run = [&](float sign) {
-        dlss->ReleaseFeature();
+    const auto run = [&](float sign, u32 preset, u32 frames) {
         auto cmd = scheduler.CommandBuffer();
-        assert(dlss->CreateFeature(cmd, {W, H, OW, OH, 3, false}));
-        for (u32 f = 0; f < 40; ++f) {
+        const Vulkan::Dlss::FeatureDesc desc{W, H, OW, OH, 3, false, preset};
+        if (!dlss->HasFeature(desc)) {
+            scheduler.WaitSubmitted();
+            dlss->ReleaseFeature();
+            assert(dlss->CreateFeature(cmd, desc));
+        }
+        assert(dlss->HasFeature(desc));
+        auto different = desc;
+        different.preset = preset == 11 ? 6 : 11;
+        assert(!dlss->HasFeature(different));
+        for (u32 f = 0; f < frames; ++f) {
             const float jx = Halton(f % 32 + 1, 2) - .5f, jy = Halton(f % 32 + 1, 3) - .5f;
             auto *pixels = static_cast<u16 *>(ai.pMappedData);
             for (u32 y = 0; y < H; ++y)
@@ -163,14 +172,29 @@ int main() {
                 ++samples;
             }
         error /= samples;
-        std::printf("DLSS viewport jitter sign %+.0f: MSE %.8f\n", sign, error);
+        std::printf("DLSS preset %s, viewport jitter sign %+.0f: MSE %.8f\n",
+                    BbSettings::DlssPresetName(preset), sign, error);
         return error;
     };
-    const auto positive = run(1), negative = run(-1);
+    const auto positive = run(1, 0, 40), negative = run(-1, 0, 40);
     std::printf("DLSS jitter ratio (+/-): %.3f\n", positive / negative);
     // A positive viewport shift is the production convention. Incorrect jitter
     // must measurably lose detail rather than silently regress to blurry output.
     assert(positive < .002 && positive < negative * .25);
+    std::array<double, 14> errors{};
+    for (int preset : BbSettings::DlssPresets) {
+        const double error = run(1, u32(preset), 8);
+        // These exercise the real DLL, including its handling of legacy hints.
+        // A finite, reconstructed output rules out a successful-but-empty dispatch.
+        assert(std::isfinite(error) && error < .02);
+        errors[preset] = error;
+    }
+    // Changing only the cached descriptor while still passing hint 0 to NGX must
+    // fail this test: the CNN and transformer selections need distinct output.
+    assert(std::abs(errors[6] - errors[11]) > 1e-7);
+    assert(std::abs(errors[11] - errors[13]) > 1e-7);
+    assert(std::abs(errors[13] - errors[12]) > 1e-7);
+    std::puts("PASS: real NGX reconstruction and live model preset switching");
     dlss->ReleaseFeature();
     vmaDestroyBuffer(instance.GetAllocator(), staging, allocation);
 }

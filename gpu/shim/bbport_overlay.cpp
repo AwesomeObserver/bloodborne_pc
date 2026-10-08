@@ -289,6 +289,24 @@ void Menu() {
             "Проверка при гостинге: сеть FSR 4 нормирует цвет по экспозиции и по ней решает, "
             "когда отбросить прошлые кадры. Меняются сразу, без перезапуска."));
     }
+    if (s.upscaler == BbSettings::UpscalerDlss) {
+        const int selected = s.dlss_preset;
+        if (ImGui::BeginCombo(BbSettings::MenuText("DLSS model preset", "Пресет модели DLSS"),
+                              BbSettings::DlssPresetLabel(selected))) {
+            for (int preset : BbSettings::DlssPresets) {
+                if (ImGui::Selectable(BbSettings::DlssPresetLabel(preset), preset == selected))
+                    Store(s.dlss_preset, preset, true);
+            }
+            ImGui::EndCombo();
+        }
+        Hint(BbSettings::MenuText(
+            "E/F: CNN. J/K: Transformer. M/L: Transformer 2. The DLL selects the model from "
+            "the preset. A-D were removed from current SDKs and may be substituted by the DLL; "
+            "E/F are deprecated. Changes apply immediately with a history reset.",
+            "E/F: свёрточная. J/K: трансформер. M/L: трансформер 2. DLL выбирает модель по "
+            "пресету. A-D удалены из актуальных SDK и могут заменяться самой DLL; E/F устарели. "
+            "Изменения применяются сразу со сбросом истории."));
+    }
     const bool upscaler_on = s.upscaler != BbSettings::UpscalerOff;
     static const char *fg_names[] = {"Off", "FSR 3.1.6 x2", "DLSS Frame Generation x2"};
     int fg = s.frame_generation;

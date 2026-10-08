@@ -54,6 +54,10 @@ Problems
 Upscaling
 - DLSS: available when the NVIDIA runtime reports support (Graphics -> Upscaler ->
   DLSS, or the in-game menu). Otherwise the option is greyed out.
+- DLSS model preset: Auto, A-F, J, K, M, L (Graphics or the in-game menu).
+  E/F select CNN, J/K select Transformer, M/L select Transformer 2 automatically.
+  A-D are legacy requests and can be replaced by the DLL; E/F are deprecated.
+  This setting is independent of the Quality/Balanced/Performance render scale.
 - FSR 3.1 works on every GPU. FSR 4 needs its assets in fsr4_shaders\ (included in this
   package, or Graphics -> "Download FSR 4 assets"); GPUs without the required shader features
   fall back to FSR 3.1 by themselves.

@@ -41,6 +41,24 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.frame_generation = value == "fsr"    ? FrameGenerationFsr
                              : value == "dlss" ? FrameGenerationDlss
                                                : FrameGenerationOff;
+    } else if (key == "dlss_preset") {
+        std::string name = value;
+        const auto first = name.find_first_not_of(" \t");
+        name = first == std::string::npos ? "" : name.substr(first);
+        const auto last = name.find_last_not_of(" \t");
+        if (last != std::string::npos) name.resize(last + 1);
+        for (char& c : name) {
+            if (c >= 'a' && c <= 'z') c -= 'a' - 'A';
+        }
+        v.dlss_preset = 0;
+        if (name == "AUTO" || name == "DEFAULT" || name == "0") return;
+        for (int preset : DlssPresets) {
+            if (name == DlssPresetName(preset) || name == std::to_string(preset)) {
+                v.dlss_preset = preset;
+                return;
+            }
+        }
+        std::printf("Settings: unknown DLSS model preset '%s'; using Auto\n", value.c_str());
     } else if (key == "preset") {
         v.preset = std::clamp(i, 0, PresetCount - 1);
     } else if (key == "sharpen") {
@@ -148,6 +166,7 @@ void Load() {
     }
     const std::pair<const char *, const char *> env_keys[] = {
         {"BB_FRAME_GENERATION", "frame_generation"},
+        {"BB_DLSS_PRESET", "dlss_preset"},
         {"BB_FSR_SHARPNESS", "sharpness"},
         {"BB_JITTER", "jitter"},
         {"BB_REACTIVE", "reactive"},
@@ -235,6 +254,7 @@ void Save() {
     put("menu_language", v.menu_language == MenuLanguage::Russian ? "ru" : "en");
     put("upscaler", UpscalerName(v.upscaler));
     put("preset", std::to_string(v.preset.load()));
+    put("dlss_preset", DlssPresetName(v.dlss_preset));
     put("sharpen", flag(v.sharpen));
     put("sharpness", fixed(v.sharpness, 2));
     put("jitter", flag(v.jitter));
@@ -325,6 +345,30 @@ const char* PresetName(int preset) {
 const char* UpscalerName(int upscaler) {
     static constexpr const char* names[UpscalerCount] = {"off", "fsr3", "fsr4", "fsr411", "taa", "dlss"};
     return names[std::clamp(upscaler, 0, UpscalerCount - 1)];
+}
+
+const char* DlssPresetName(int preset) {
+    static constexpr const char* names[] = {"auto", "A", "B", "C", "D", "E", "F", "J", "K", "M", "L"};
+    for (int i = 0; i < DlssPresetCount; ++i) {
+        if (preset == DlssPresets[i]) return names[i];
+    }
+    return "auto";
+}
+
+const char* DlssPresetLabel(int preset) {
+    switch (preset) {
+    case 1: return MenuText("A (legacy)", "A (устаревший)");
+    case 2: return MenuText("B (legacy)", "B (устаревший)");
+    case 3: return MenuText("C (legacy)", "C (устаревший)");
+    case 4: return MenuText("D (legacy)", "D (устаревший)");
+    case 5: return MenuText("E (CNN)", "E (свёрточная)");
+    case 6: return MenuText("F (CNN)", "F (свёрточная)");
+    case 10: return MenuText("J (Transformer)", "J (трансформер)");
+    case 11: return MenuText("K (Transformer)", "K (трансформер)");
+    case 13: return MenuText("M (Transformer 2)", "M (трансформер 2)");
+    case 12: return MenuText("L (Transformer 2)", "L (трансформер 2)");
+    default: return MenuText("Auto (DLL default)", "Авто (выбор DLL)");
+    }
 }
 
 } // namespace BbSettings

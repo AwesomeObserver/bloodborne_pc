@@ -166,7 +166,7 @@ TWEAKS = [
 INI_FLAGS = {'sharpen', 'object_motion', 'show_fps', *(k for k, _t, _o in EFFECTS + EXTRAS + CHEATS + TWEAKS)}
 INI_DEFAULTS = {'upscaler': 'fsr4', 'preset': '1', 'sharpen': '1', 'sharpness': '0.50',
                 'object_motion': '1', 'show_fps': '1', 'output_res': '1920x1080', 'model_lod': '0',
-                'live_resolution': 'auto', 'frame_generation': 'off',
+                'live_resolution': 'auto', 'frame_generation': 'off', 'dlss_preset': 'auto',
                 **{key: '1' if on else '0' for key, _t, on in EFFECTS + EXTRAS + CHEATS + TWEAKS}}
 APP_DEFAULTS = {'ui_language': '', 'game_dir': str(PORT_DIR.parent / 'CUSA03173'), 'user_dir': '',
                 'mods_dir': '', 'mods_enabled': True, 'patches_dir': '', 'language': '1',
@@ -191,6 +191,11 @@ PRESETS = [('0', ('Native AA (×1.0)',)), ('1', ('Quality (×1.5)',)), ('2', ('B
 FRAME_GENERATION = [('off', ('Off', 'Выключена')),
                     ('dlss', ('DLSS Frame Generation ×2 (RTX 40+)', 'DLSS генерация кадров ×2 (RTX 40+)')),
                     ('fsr', ('FSR 3.1 Frame Generation ×2', 'FSR 3.1 генерация кадров ×2'))]
+DLSS_PRESETS = [('auto', ('Auto (DLL default)', 'Авто (выбор DLL)')),
+                *[(p, (f'{p} (legacy)', f'{p} (устаревший)')) for p in 'ABCD'],
+                *[(p, (f'{p} (CNN)', f'{p} (свёрточная)')) for p in 'EF'],
+                *[(p, (f'{p} (Transformer)', f'{p} (трансформер)')) for p in 'JK'],
+                *[(p, (f'{p} (Transformer 2)', f'{p} (трансформер 2)')) for p in 'ML']]
 OUTPUTS = [('1280x720', ('1280 × 720 (Steam Deck)',)), ('1920x1080', ('1920 × 1080',)),
            ('2560x1440', ('2560 × 1440',)), ('3840x2160', ('3840 × 2160 (4K)',))]
 LIVE = [('auto', ('Auto (by graphics card)', 'Авто (по видеокарте)')), ('0', ('Off (faster)', 'Выключена (быстрее)')),
@@ -259,6 +264,11 @@ def load_ini():
         if '=' in line and not line.lstrip().startswith('#'):
             key, value = line.split('=', 1)
             values[key.strip()] = value.strip()
+    # Canonicalize manual INI edits before the readonly model selector is built.
+    model_names = {preset.upper(): preset for preset, _label in DLSS_PRESETS}
+    model_names.update({str(ord(preset) - ord('A') + 1): preset
+                        for preset, _label in DLSS_PRESETS if len(preset) == 1})
+    values['dlss_preset'] = model_names.get(values['dlss_preset'].strip().upper(), 'auto')
     return values, lines
 
 
@@ -737,6 +747,21 @@ class Launcher:
         self.row(f, _('Quality preset', 'Пресет'), self.choice(f, 'preset', 'ini', PRESETS),
                  _('Render scale per axis: Quality renders at 1/1.5 of the output size.',
                    'Масштаб рендера по каждой оси: Quality рисует в 1/1.5 размера вывода.'))
+        self.dlss_preset_box = self.choice(f, 'dlss_preset', 'ini', DLSS_PRESETS)
+        self.row(f, _('DLSS model preset', 'Пресет модели DLSS'), self.dlss_preset_box,
+                 _('The preset selects the model automatically: E/F use CNN, J/K use Transformer, '
+                   'M/L use Transformer 2. A-D were removed from current SDKs and may be substituted '
+                   'by the DLL; E/F are deprecated. Auto keeps the DLL default.',
+                   'Пресет автоматически выбирает модель: E/F — свёрточная, J/K — трансформер, '
+                   'M/L — трансформер 2. A-D удалены из актуальных SDK и могут заменяться DLL; '
+                   'E/F устарели. Авто сохраняет выбор DLL.'))
+        dlss_box = self.dlss_preset_box
+        def update_dlss_state(*_args):
+            if dlss_box.winfo_exists():
+                dlss_box.configure(state='readonly' if self.var('upscaler', 'ini').get() == 'dlss'
+                                   else 'disabled')
+        self.var('upscaler', 'ini').trace_add('write', update_dlss_state)
+        update_dlss_state()
         self.row(f, _('Output resolution', 'Разрешение вывода'), self.choice(f, 'output_res', 'ini', OUTPUTS),
                  _('What the upscaler produces; the HUD is drawn at this size too. Match your monitor '
                    '(2560x1440 for 1440p) to avoid an additional stretch of the reconstructed image.',

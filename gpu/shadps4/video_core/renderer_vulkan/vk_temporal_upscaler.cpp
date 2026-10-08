@@ -346,13 +346,17 @@ bool TemporalUpscaler::OnFrameStart() {
     // The guest's startup resolution patch remains in effect until restart. Keep the FSR
     // model at the applied preset while the menu saves the requested one for run.sh.
     const int preset = BbSettings::RenderPreset();
+    const int upscaler = settings.upscaler.load();
+    const int dlss_preset = settings.dlss_preset.load();
+    const bool dlss_changed = upscaler == BbSettings::UpscalerDlss &&
+                              applied_dlss_preset != dlss_preset;
+    if (applied_upscaler != upscaler || dlss_changed) dlss_failed = false;
     if (applied_preset != preset || settings.upscaler == BbSettings::UpscalerOff) failed = false;
     if (dispatch_failed.exchange(false, std::memory_order_relaxed)) {
         failed = true;
     }
     const bool active = Active();
     const bool jitter_on = active && settings.jitter && !BbToggle::Disabled(1u << 25);
-    const int upscaler = settings.upscaler.load();
     const int output = settings.output_res.load();
     const bool output_changed = !scaled_session && applied_output != output;
     if (output_changed) {
@@ -364,7 +368,8 @@ bool TemporalUpscaler::OnFrameStart() {
     }
     const bool changed = output_changed || applied_preset != preset || active != last_active ||
                          jitter_on != last_jitter || applied_upscaler != upscaler ||
-                         applied_frame_generation != settings.frame_generation;
+                         applied_frame_generation != settings.frame_generation || dlss_changed;
+    applied_dlss_preset = dlss_preset;
     applied_frame_generation = settings.frame_generation;
     if (applied_upscaler != upscaler) {
         // A failed provider keeps a fatal flag internally; a user retry gets a fresh context.
@@ -2296,12 +2301,14 @@ bool TemporalUpscaler::RecordDlss(vk::CommandBuffer cmdbuf, const Dlss::Resource
     // 0..1 color; process a decoded view at HDR precision to avoid quantization/banding.
     const bool linear = hdr || color.format == vk::Format::eR8G8B8A8Srgb ||
                         color.format == vk::Format::eB8G8R8A8Srgb;
-    const Dlss::FeatureDesc desc{w, h, ow, oh, Dlss::QualityForScale(float(ow) / float(w)), linear};
+    const Dlss::FeatureDesc desc{w, h, ow, oh, Dlss::QualityForScale(float(ow) / float(w)), linear,
+                                u32(BbSettings::Get().dlss_preset.load())};
     bool ok = true;
     if (!dlss->HasFeature(desc)) {
         // The previous feature may still be in use by submitted work; `cmdbuf` stays open.
         scheduler.WaitSubmitted();
         dlss->ReleaseFeature();
+        std::printf("DLSS model preset: %s\n", BbSettings::DlssPresetName(desc.preset));
         ok = dlss->CreateFeature(cmdbuf, desc);
         reset = true;
     }

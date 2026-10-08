@@ -16,6 +16,10 @@ inline bool IsFsr4(int upscaler) {
     return upscaler == UpscalerFsr4 || upscaler == UpscalerFsr411;
 }
 enum Preset : int { NativeAA = 0, Quality, Balanced, Performance, UltraPerformance, PresetCount };
+
+/// Native NGX model hint values, independent of the render-resolution preset.
+inline constexpr int DlssPresets[] = {0, 1, 2, 3, 4, 5, 6, 10, 11, 13, 12};
+inline constexpr int DlssPresetCount = sizeof(DlssPresets) / sizeof(DlssPresets[0]);
 enum DebugView : int { DebugNone = 0, DebugReactive = 1, DebugMotion = 2, DebugViewCount };
 enum class MenuLanguage { English, Russian };
 enum FrameGeneration : int {
@@ -66,6 +70,7 @@ struct Values {
     std::atomic<MenuLanguage> menu_language{MenuLanguage::Russian};
     std::atomic<int> upscaler{UpscalerFsr3};
     std::atomic<int> preset{NativeAA};
+    std::atomic<int> dlss_preset{0}; ///< 0 = DLL default; otherwise an NGX model preset
     std::atomic<int> frame_generation{FrameGenerationOff};
     std::atomic<bool> fsr_fg_supported{false}, dlss_fg_supported{false};
     std::atomic<const char *> frame_generation_problem{nullptr};
@@ -131,6 +136,8 @@ void Save();
 /// Render resolution divisor of a preset (1.0 native, 1.5 quality, ...).
 float PresetScale(int preset);
 const char* PresetName(int preset);
+const char* DlssPresetName(int preset);
+const char* DlssPresetLabel(int preset);
 const char* UpscalerName(int upscaler);
 
 } // namespace BbSettings

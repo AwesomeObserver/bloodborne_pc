@@ -15,6 +15,40 @@ with negative jitter. Flipping the sign would make reconstruction
 about 27 times worse in this test. These numbers validate the sampling convention;
 they are not a measurement of Bloodborne's visual quality.
 
+## DLSS model presets
+
+The launcher Graphics page and the in-game menu expose **DLSS model preset**,
+separately from the Quality/Balanced/Performance render scale. Select Auto or
+A, B, C, D, E, F, J, K, M, L. The preset is passed to NGX for every quality mode;
+the DLSS DLL selects the corresponding model without a separate model switch.
+
+| Selection | Model |
+|---|---|
+| Auto | The DLL's default for the selected quality mode |
+| A, B, C, D | Legacy hints; removed from current SDKs and may be substituted by the DLL |
+| E, F | Convolutional (CNN); deprecated by NVIDIA |
+| J, K | Transformer |
+| M, L | Second-generation transformer |
+
+Changing the model preset in game recreates the DLSS feature after its previous
+GPU work completes and resets temporal and frame-generation history. It does not
+change render resolution or require a game restart. The choice is saved as
+`dlss_preset=auto|A|B|C|D|E|F|J|K|M|L` in `bbport.ini`;
+`BB_DLSS_PRESET` overrides it (letters or native NGX numeric hint values).
+Invalid and reserved values select Auto. A-D are retained for compatibility,
+not as a promise that a current DLL contains those original models.
+The real NGX regression test exercises every selection and switching between
+them, and checks that CNN and transformer selections produce distinct output.
+With the validated 310.7 DLL, A-D produce the same output as Auto, confirming
+the legacy fallback. Model quality still needs comparison in gameplay.
+
+NVIDIA's [SDK preset definitions](https://github.com/NVIDIA-RTX/Streamline/blob/main/include/sl_dlss.h)
+describe removed and deprecated hints. NVIDIA also describes the
+[second-generation transformer models](https://www.nvidia.com/en-us/geforce/news/dlss-4-5-dynamic-multi-frame-gen-6x-2nd-gen-transformer-super-res/).
+See the DLSS SR programming guide below for integration details.
+
+## Frame generation
+
 Frame generation has two selectable providers:
 
 - **DLSS FG ×2**, through the native Vulkan NGX FrameGeneration API. Availability

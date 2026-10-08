@@ -200,6 +200,7 @@ private:
     SceneTargets& scene_targets;
     int applied_preset = -1;
     int applied_upscaler = -1;
+    int applied_dlss_preset = -1;
     int applied_frame_generation = -1;
     std::vector<std::shared_ptr<FrameGenerationInput>> generation_pool;
     std::shared_ptr<FrameGenerationInput> generation_input, display_generation_input;

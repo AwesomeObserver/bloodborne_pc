@@ -22,7 +22,8 @@ Updated to upstream **0.4** (`daa7165`); see the [migration and validation repor
   Spanish, Portuguese, French, German, Italian, Polish, Turkish, Chinese, Japanese, Korean.
 - **Updates from the launcher:** when a new version is out it tells you, and **Update**
   installs it. Your saves, settings and mods are kept.
-- **NVIDIA DLSS**, available when the runtime reports support.
+- **NVIDIA DLSS**, available when the runtime reports support, with a
+  [model preset selector](docs/dlss-frame-generation-windows.md#dlss-model-presets).
 - **AMD FSR 3.1, FSR 4 and FSR 4.1.1/FP8** upscaling (matching GPU features and assets required), plus native-resolution TAA.
 - **Remappable keyboard and controller**, controller selection and working touchpad gestures.
 - **Unlocked frame rate** with a frame cap (up to 120 by default), or 30/60/90 FPS.
