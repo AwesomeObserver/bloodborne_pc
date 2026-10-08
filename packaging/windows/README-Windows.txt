@@ -118,5 +118,10 @@ https://github.com/AwesomeObserver/bloodborne_pc/blob/windows/docs/dlss-frame-ge
 Raw mouse camera:
 https://github.com/AwesomeObserver/bloodborne_pc/blob/windows/docs/mouse-camera-windows.md
 
+Camera response diagnostics: run Trace Mouse Camera.cmd, load a character,
+enable F4 and record direction reversals, vertical sweeps and stops for about
+15 seconds. Close the game; the report ZIP appears in logs\.
+This optional mode collects evidence and does not fix the reported camera inertia.
+
 GNU GPL v2 or later. See LICENSE, licenses\ and README.md for third-party credits.
 Not affiliated with Sony Interactive Entertainment or FromSoftware.

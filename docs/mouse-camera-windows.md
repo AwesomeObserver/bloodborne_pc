@@ -1,5 +1,10 @@
 # Raw mouse camera on Windows
 
+**Known gameplay issue:** Camera Fix / Crash Diagnostics still has a reported delay
+when reversing horizontal mouse motion, unequal perceived X/Y sensitivity and
+vertical inertia. The checks below validate input transport and angle writes;
+they do not establish the final camera response in the game.
+
 **F4** toggles capture. The launcher Controls page and in-game menu expose sensitivity
 (1-400%, default 100%) and invert Y. At 100%, **900 raw counts = one radian on either
 axis**. Binoculars use half sensitivity. Menus, name entry and loss of focus release
@@ -115,3 +120,26 @@ validation is still needed:** no game dump is available in this workspace. Check
 free-camera flicks and stops, equal horizontal/vertical sweeps, right-stick movement
 with F4 on, controller-to-mouse transitions, lock-on, binoculars, menus and Alt+Tab.
 Render rate, queued frames and frame generation can still affect display latency.
+
+## Capture a camera report
+
+Run **Trace Mouse Camera.cmd** from a diagnostic package. It uses the game and
+settings already selected in the launcher. Load a character, enable F4, then spend
+about 15 seconds reversing left/right, sweeping up/down and stopping completely.
+Close the game. The script creates **logs/mouse-camera-*.zip** for this session.
+Python installation is not required. Starting the game normally leaves tracing off.
+
+The report includes the raw X/Y counts, sensitivity, ownership flags, camera angles,
+follow parameters, position/reference/focus vectors and the unmodified camera
+routine with bounded direct callees and referenced constants. `before_*` fields
+are sampled at update entry; position then reflects the preceding game update.
+`after_*` fields follow this port's mouse writes, before the game continues. Separate
+camera-object addresses must be analyzed separately. This makes it possible to
+distinguish input loss, angle feedback and subsequent camera-position chasing.
+
+Recording starts at the first mouse movement and stops after 4096 camera updates.
+The fixed file is approximately 1.32 MiB. Startup creates and prefaults the mapping;
+camera callbacks perform bounded memory copies, with no allocation, file API calls
+or logger locks. Original code is disassembled once before the hooks are installed.
+No assets, saves, player names or settings are collected.
+This mode collects evidence; **it does not fix the reported gameplay behavior**.

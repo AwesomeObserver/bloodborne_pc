@@ -17,6 +17,7 @@
 #include <cpuid.h>
 #include <Zydis/Zydis.h>
 #include <xbyak/xbyak.h>
+#include "bbport_mouse_trace.h"
 #endif
 
 namespace BbMouse {
@@ -277,8 +278,15 @@ void Stick(std::uint8_t x, std::uint8_t y) {
     }
 }
 void Apply(void* pointer) {
-    if (!active.load(std::memory_order_acquire)) return;
-    const auto motion = pending_motion.exchange(0, std::memory_order_relaxed);
+    const bool captured = active.load(std::memory_order_acquire);
+    const auto motion = captured ? pending_motion.exchange(0, std::memory_order_relaxed) : 0;
+#ifdef _WIN32
+    const auto& settings = BbSettings::Get();
+    Trace::Sample sample(pointer, motion, settings.mouse_sensitivity,
+        unsigned(captured) | unsigned(mouse_owns.load(std::memory_order_acquire) != 0) << 1 |
+        unsigned(stick_moving.load(std::memory_order_acquire)) << 2 | unsigned(settings.mouse_invert_y.load()) << 3);
+#endif
+    if (!captured) return;
     const auto x = std::int32_t(motion), y = std::int32_t(motion >> 32);
     if (!pointer || !mouse_owns.load(std::memory_order_acquire) ||
         stick_moving.load(std::memory_order_acquire)) return;
@@ -379,9 +387,15 @@ bool Install(unsigned char* image, std::uint64_t size) {
                                       reinterpret_cast<intptr_t>(image + hook.offset + 5);
             if (displacement < INT32_MIN || displacement > INT32_MAX) throw Xbyak::Error(Xbyak::ERR_OFFSET_IS_TOO_BIG);
             jumps[i] = std::int32_t(displacement);
-            Xbyak::Label original, done;
+            Xbyak::Label original, done, callback;
             code.lea(rsp, ptr[rsp - 128]);
             code.pushfq(); code.push(rax);
+            if (!i) {
+                // Opt-in tracing also samples native ownership and idle frames.
+                code.mov(rax, reinterpret_cast<uintptr_t>(&Trace::enabled));
+                code.cmp(byte[rax], 0);
+                code.jne(callback, Xbyak::CodeGenerator::T_NEAR);
+            }
             code.mov(rax, reinterpret_cast<uintptr_t>(&active));
             code.cmp(byte[rax], 0);
             code.je(original, Xbyak::CodeGenerator::T_NEAR);
@@ -395,6 +409,7 @@ bool Install(unsigned char* image, std::uint64_t size) {
                 code.cmp(dword[r13 + 0x154], 0x3f800000);
                 code.je(original, Xbyak::CodeGenerator::T_NEAR);
             }
+            code.L(callback);
             code.pop(rax); code.popfq();
             code.lea(rsp, ptr[rsp + 128]);
             if (!i) {
@@ -420,6 +435,7 @@ bool Install(unsigned char* image, std::uint64_t size) {
         VirtualFree(memory, 0, MEM_RELEASE);
         return fail("Cannot generate camera hooks");
     }
+    Trace::Start(image, size, FunctionBegin, FunctionEnd);
     // All sites were validated first. The loader owns writable image pages
     // and has not entered guest code, so the patch cannot race execution.
     for (unsigned i = 0; i < hooks.size(); ++i) {
