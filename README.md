@@ -6,11 +6,14 @@ The original PlayStation 4 game runs directly on your PC: its own x86-64 code ru
 and the graphics are translated to Vulkan. No emulator window, no setup scripts: unpack the zip,
 start `Bloodborne.exe`, pick your game folder and press **PLAY**.
 
-**[Download the latest version](https://github.com/Supermedo/bloodborne_pc/releases/latest)** · **[Join the Discord](https://discord.gg/yTMG8c4Bqm)**
+Windows fork: [AwesomeObserver/bloodborne_pc](https://github.com/AwesomeObserver/bloodborne_pc).
+Updated to upstream **0.4** (`daa7165`); see the [migration and validation report](docs/windows-upstream-0.4.md).
+
+**[Download the latest version](https://github.com/AwesomeObserver/bloodborne_pc/releases/latest)** · **[Join the Discord](https://discord.gg/yTMG8c4Bqm)**
 
 > **No game files are included.** You need your own decrypted dump of Bloodborne
-> (CUSA03173). Version 1.09 is needed for the community patches (60/90/unlocked FPS,
-> resolution, effects); other versions run at 30 FPS.
+> (CUSA03173), updated to **1.09**, with the supported decrypted executable.
+> The launcher verifies the executable before applying patches or starting the game.
 > This project is not affiliated with Sony Interactive Entertainment or FromSoftware.
 
 ## Features
@@ -20,7 +23,8 @@ start `Bloodborne.exe`, pick your game folder and press **PLAY**.
 - **Updates from the launcher:** when a new version is out it tells you, and **Update**
   installs it. Your saves, settings and mods are kept.
 - **NVIDIA DLSS** on GeForce RTX cards (RTX 20 series and newer).
-- **AMD FSR 3.1 and FSR 4** upscaling, plus native-resolution TAA.
+- **AMD FSR 3.1, FSR 4 and FSR 4.1.1/FP8** upscaling (matching GPU features and assets required), plus native-resolution TAA.
+- **Remappable keyboard and controller**, controller selection and working touchpad gestures.
 - **Unlocked frame rate** with a frame cap (up to 120 by default), or 30/60/90 FPS.
 - **Output resolutions** from 720p to 4K, presets from Native AA to Ultra Performance.
 - **Cheats page:** never die, stealth, silent footsteps, Rally that never fades, enemy control,
@@ -45,7 +49,7 @@ Nothing else to install: everything the game needs is in the zip.
 
 ## How to play
 
-1. Download the zip from [Releases](https://github.com/Supermedo/bloodborne_pc/releases/latest)
+1. Download the zip from [Releases](https://github.com/AwesomeObserver/bloodborne_pc/releases/latest)
    and unpack it anywhere.
 2. Start `Bloodborne.exe`.
 3. On **Game & effects**, choose your game folder (the one with `eboot.bin`).
@@ -65,7 +69,7 @@ Keyboard: WASD move, arrows camera, Space Cross, Left Shift Circle, E Square, Q 
 
 ## Problems and feedback
 
-Ask on the [Discord server](https://discord.gg/yTMG8c4Bqm), or open an [issue](https://github.com/Supermedo/bloodborne_pc/issues) and attach
+Ask on the [Discord server](https://discord.gg/yTMG8c4Bqm), or open an [issue](https://github.com/AwesomeObserver/bloodborne_pc/issues) and attach
 `user\last_run.log` from the game folder, with your graphics card and what happened.
 If the game shows only a black screen, try **Advanced → Clear shader cache** first.
 
