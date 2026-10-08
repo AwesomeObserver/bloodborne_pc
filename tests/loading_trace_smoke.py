@@ -26,7 +26,7 @@ def main():
         end = time.perf_counter() + .3
         while time.perf_counter() < end:
             sum(range(10000))
-        time.sleep(.7)
+        time.sleep(1.8)  # allow a bounded retry when enumeration precedes thread naming
         print('fixture-end', flush=True)
         return
     root = Path(__file__).resolve().parent.parent

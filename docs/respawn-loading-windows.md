@@ -1,9 +1,61 @@
 # Respawn loading on Windows
 
-The reported loading screen lasts approximately **3–4 seconds after death**.
-Loading through **Continue** is much faster; teleportation does not show the delay.
-The cause has **not yet been established**, and this change does not claim a respawn
-performance fix.
+The initial estimate was **3–4 seconds after death**; the first marked capture
+measures **13.84 seconds**. Loading through **Continue** is faster; teleportation
+does not show the reported delay.
+The cause has **not yet been established**. The first capture confirms a long quiet
+interval between resource-loading bursts; it does not identify the game instruction
+responsible for it. No respawn performance fix is claimed.
+
+## First capture: October 9
+
+`loading-20261009-005030-519237.zip` has SHA-256
+`beb81468e5a4af742111d4e4f3464be16d834f1e41e8969f858450c4a40dce65`.
+The user confirmed that marker 3 was pressed on the loading screen and that this
+was an ordinary respawn at an unlocked lamp, not the first death tutorial.
+
+| Marked interval | Capture seconds | Elapsed |
+| --- | --- | --- |
+| Continue | 19.2571–24.9317 | 5.6746 s |
+| Death loading screen to controllable character | 49.9068–63.7461 | 13.8393 s |
+
+The nearest process-counter samples show approximately 884.4 MiB of logical reads
+in the Continue interval and 497.3 MiB in the respawn interval. Between samples
+50.9778 and 60.9510, only approximately 1.48 MiB of reads completed. Active resource
+post-processing clusters around capture seconds 50 and 62. The character and cloth
+threads are recreated around second 50; recreating them does not take the whole
+remaining interval.
+
+The native frame log contains 6,583 flips over 55.1821 seconds. Its long stretch of
+loading-screen rendering remains around 120 flips per second. Every logged GPU
+buffer readback combined takes **9.41 ms** across the whole session. GPU tick waits
+are at most 0.4% in the printed five-second report windows. These measurements do
+not support a multi-second GPU queue/readback stall as the main explanation.
+
+A quiet I/O counter interval does **not** distinguish a timer, a game task waiting
+for a dependency, and an outstanding blocking file operation. There is no per-call
+file latency or game instruction snapshot in this report. The guest wait table also
+hits its 512-entry capacity in the first window, so absence of another wait site is
+not proof that no such wait happened. No synchronization or timer bypass was applied.
+
+`BUILD-INFO.txt` identifies an older Axis Order package. This is package metadata;
+it does not verify the actual running executable if files were updated separately.
+The game log reports PE timestamp `6ac7f5eb`. None of the later keyboard handoff or
+command-data crash changes targets the game's respawn state machine.
+
+The collector spends 45.45 wall-seconds inside sampling calls during a 69.90-second
+session. This is elapsed time, **not** collector CPU time or proof that the collector
+caused the loading delay. It nevertheless exposes avoidable diagnostic work: a
+system-wide process/thread census on every sample and repeated queries for unnamed
+threads. Schema 2 limits the census to twice per second and empty-name retries to
+three per thread, while retaining approximately 100 ms counter samples and 10 ms
+marker polling. Maximum sampler call duration is recorded as well. New threads can
+take up to one census interval, approximately 500 ms, to appear in the report.
+
+Further code-level investigation needs the matching decrypted **`eboot.bin` from
+game version 1.09**. The report contains guest offsets, but no instructions at those
+offsets; the executable is unavailable in this workspace. An entire game directory
+or save data is not needed for that analysis.
 
 ## What was checked
 
@@ -14,9 +66,9 @@ performance fix.
 - Reusing or unmapping GPU resources can drain recording work and perform readbacks.
   These paths exist in `Rasterizer::InvalidateMemory`, `Rasterizer::UnmapMemory` and
   `BufferCache::ReadMemory`. Their presence does not show that they cause this report.
-- The game executable and a reproducible death-to-respawn session are unavailable
-  in this workspace. A timer inside the game, world reset work, saving and GPU waits
-  remain possible explanations. The host code alone cannot distinguish them.
+- The capture is available, but the game executable and a local session for replay
+  are unavailable. The host code and aggregated counters cannot identify the guest
+  instruction responsible for the pause.
 
 ## Capture a comparison
 

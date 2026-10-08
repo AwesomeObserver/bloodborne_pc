@@ -48,6 +48,10 @@ def descendants(root_pid, entries):
 
 class WindowsSampler:
     """Read-only process/thread counters. No suspension, memory reads or input injection."""
+    INVENTORY_INTERVAL = .5
+    NAME_RETRY_INTERVAL = 1.0
+    NAME_RETRIES = 3
+
     def __init__(self):
         if sys.platform != 'win32':
             raise OSError('Loading diagnostics require Windows.')
@@ -61,6 +65,7 @@ class WindowsSampler:
             'Thread32Next': (wt.BOOL, [wt.HANDLE, ctypes.POINTER(ThreadEntry)]),
             'OpenProcess': (wt.HANDLE, [wt.DWORD, wt.BOOL, wt.DWORD]),
             'OpenThread': (wt.HANDLE, [wt.DWORD, wt.BOOL, wt.DWORD]),
+            'GetProcessIdOfThread': (wt.DWORD, [wt.HANDLE]),
             'CloseHandle': (wt.BOOL, [wt.HANDLE]),
             'LocalFree': (wt.HANDLE, [wt.HANDLE]),
             'GetProcessIoCounters': (wt.BOOL, [wt.HANDLE, ctypes.POINTER(IoCounters)]),
@@ -79,6 +84,9 @@ class WindowsSampler:
         self.u.GetForegroundWindow.restype = wt.HWND
         self.u.GetWindowThreadProcessId.argtypes = [wt.HWND, ctypes.POINTER(wt.DWORD)]
         self.processes, self.threads = {}, {}
+        self._inventory = None
+        self._inventory_at = 0
+        self._name_retries = {}
         self.f8_down = False
 
     def inventory(self):
@@ -121,7 +129,11 @@ class WindowsSampler:
             self.k.LocalFree(text)
 
     def sample(self, root_pid, names=('bb-probe.exe',)):
-        processes, threads = self.inventory()
+        now = time.perf_counter()
+        if self._inventory is None or now - self._inventory_at >= self.INVENTORY_INTERVAL:
+            self._inventory = self.inventory()
+            self._inventory_at = now
+        processes, threads = self._inventory
         related = descendants(root_pid, processes)
         active = {pid for pid, _parent, name in processes if pid in related and name.lower() in names}
         process_rows, thread_rows = [], []
@@ -149,20 +161,29 @@ class WindowsSampler:
                 handle = self.k.OpenThread(0x800, False, tid)
                 if not handle:
                     continue
+                if self.k.GetProcessIdOfThread(handle) != pid:
+                    self.k.CloseHandle(handle)
+                    continue  # ID reused since the last inventory, by another process
                 cached = (handle, self.thread_name(handle))
                 self.threads[tid] = cached
+                self._name_retries[tid] = (now + self.NAME_RETRY_INTERVAL, self.NAME_RETRIES)
             elif not cached[1]:
-                cached = (cached[0], self.thread_name(cached[0]))
-                self.threads[tid] = cached
+                retry_at, remaining = self._name_retries[tid]
+                if remaining and now >= retry_at:
+                    cached = (cached[0], self.thread_name(cached[0]))
+                    self.threads[tid] = cached
+                    self._name_retries[tid] = (now + self.NAME_RETRY_INTERVAL, remaining - 1)
             cpu = self.times(cached[0], thread=True)
             if cpu:
                 thread_rows.append([pid, tid, cached[1], *cpu])
             else:
                 self.k.CloseHandle(self.threads.pop(tid)[0])
+                self._name_retries.pop(tid, None)
         for pid in set(self.processes) - active:
             self.k.CloseHandle(self.processes.pop(pid))
         for tid in set(self.threads) - live_threads:
             self.k.CloseHandle(self.threads.pop(tid)[0])
+            self._name_retries.pop(tid, None)
         return process_rows, thread_rows
 
     def marker(self, active):
@@ -180,6 +201,8 @@ class WindowsSampler:
             self.k.CloseHandle(handle)
         self.processes.clear()
         self.threads.clear()
+        self._name_retries.clear()
+        self._inventory = None
 
 
 REPORT_FILES = ('metadata.json', 'markers.csv', 'process.csv', 'threads.csv', 'game.log',
@@ -209,8 +232,11 @@ def capture(root, command=None, names=('bb-probe.exe',), interval=.1):
            'BB_FRAME_LOG': str(directory / 'frames.csv'),
            'BB_WAIT_LOG': str(directory / 'waits.log'),
            'BB_READBACK_LOG': str(directory / 'readbacks.csv')}
-    metadata = {'schema': 1, 'started': datetime.now().astimezone().isoformat(),
+    metadata = {'schema': 2, 'started': datetime.now().astimezone().isoformat(),
                 'sample_interval_s': interval, 'marker_poll_interval_s': .01,
+                'inventory_interval_s': sampler.INVENTORY_INTERVAL,
+                'empty_name_retry_interval_s': sampler.NAME_RETRY_INTERVAL,
+                'empty_name_retries': sampler.NAME_RETRIES,
                 'markers': [], 'processes': [],
                 'clock': 'process.csv, threads.csv, markers.csv and game.log: seconds since capture start',
                 'native_clocks': 'frames.csv: since first flip; readbacks.csv: since logger creation; waits.log: 5-second report windows',
@@ -222,6 +248,7 @@ def capture(root, command=None, names=('bb-probe.exe',), interval=.1):
     start = time.perf_counter()
     log_bytes = 0
     sample_wall_s = 0
+    sample_max_wall_s = 0
     sample_count = 0
 
     def drain(process):
@@ -266,7 +293,9 @@ def capture(root, command=None, names=('bb-probe.exe',), interval=.1):
                     if time.perf_counter() >= next_sample:
                         sampled = time.perf_counter()
                         prows, trows = sampler.sample(process.pid, names)
-                        sample_wall_s += time.perf_counter() - sampled
+                        sample_wall = time.perf_counter() - sampled
+                        sample_wall_s += sample_wall
+                        sample_max_wall_s = max(sample_max_wall_s, sample_wall)
                         sample_count += 1
                         stamp = round(sampled - start, 4)
                         pw.writerows([[stamp, *row] for row in prows])
@@ -289,7 +318,8 @@ def capture(root, command=None, names=('bb-probe.exe',), interval=.1):
             process.stdout.close()
             metadata.update(exit_code=process.returncode, duration_s=time.perf_counter() - start,
                             game_log_truncated=log_bytes > 16 * 1024 * 1024,
-                            sample_count=sample_count, sample_wall_s=sample_wall_s)
+                            sample_count=sample_count, sample_wall_s=sample_wall_s,
+                            sample_max_wall_s=sample_max_wall_s)
     finally:
         sampler.close()
     (directory / 'metadata.json').write_text(json.dumps(metadata, indent=2) + '\n', encoding='utf-8')
