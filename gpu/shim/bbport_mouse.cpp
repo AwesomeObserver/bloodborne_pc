@@ -82,10 +82,39 @@ bool StoreInstruction(const unsigned char* p) {
         operands[0].type != ZYDIS_OPERAND_TYPE_MEMORY ||
         operands[0].mem.base != ZYDIS_REGISTER_R13 ||
         operands[0].mem.index != ZYDIS_REGISTER_NONE ||
-        operands[1].type != ZYDIS_OPERAND_TYPE_REGISTER) return false;
+        operands[1].type != ZYDIS_OPERAND_TYPE_REGISTER ||
+        operands[1].reg.value < ZYDIS_REGISTER_XMM0 ||
+        operands[1].reg.value > ZYDIS_REGISTER_XMM15) return false;
     const auto offset = operands[0].mem.disp.value;
-    return offset == 0x140 || offset == 0x144 || offset == 0x150 ||
-           offset == 0x26c || offset == 0x270;
+    // The 1.09 camera also stores its rotation state at +130 and +294.
+    // Checking only the angle fields we write in Apply rejects these stores.
+    return offset == 0x130 || offset == 0x140 || offset == 0x144 || offset == 0x150 ||
+           offset == 0x26c || offset == 0x270 || offset == 0x294;
+}
+
+bool RotationPatch(const unsigned char* p) {
+    // The bundled "Disable Camera Auto Rotation via Movement" patch replaces
+    // these exact sites with nine single-byte NOPs. Leave those sites untouched,
+    // including when F4 is off or the game enters lock-on.
+    return std::all_of(p, p + 9, [](unsigned char value) { return value == 0x90; });
+}
+
+void LogSignature(const unsigned char* image, std::size_t site, std::size_t size) {
+    std::fprintf(stderr, "Mouse camera: rejected image+0x%zx; bytes:", site);
+    for (std::size_t n = 0; n < size; ++n) std::fprintf(stderr, " %02x", image[site + n]);
+    ZydisDecoder decoder;
+    ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64);
+    ZydisDecodedInstruction inst{};
+    ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT]{};
+    if (ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, image + site, size, &inst, operands))) {
+        ZydisFormatter formatter;
+        ZydisFormatterInit(&formatter, ZYDIS_FORMATTER_STYLE_INTEL);
+        char text[256]{};
+        if (ZYAN_SUCCESS(ZydisFormatterFormatInstruction(&formatter, &inst, operands,
+                inst.operand_count_visible, text, sizeof(text), site, ZYAN_NULL)))
+            std::fprintf(stderr, "; %s", text);
+    }
+    std::fputc('\n', stderr);
 }
 
 void* AllocateNear(unsigned char* image, std::uint64_t size) {
@@ -189,13 +218,23 @@ void Apply(void* pointer) {
 bool Install(unsigned char* image, std::uint64_t size) {
 #ifdef _WIN32
     if (Available()) return true;
-    const auto fail = [](const char* reason) { problem = reason; return false; };
+    const auto fail = [](const char* reason) {
+        std::fprintf(stderr, "Mouse camera unavailable: %s\n", reason);
+        problem = reason;
+        return false;
+    };
     if (size < 0x553e8d8 || !image) return fail("Mouse camera needs the supported Bloodborne 1.09 image");
-    if (std::memcmp(image + Sites[0], MainCode.data(), MainCode.size()))
+    if (std::memcmp(image + Sites[0], MainCode.data(), MainCode.size())) {
+        LogSignature(image, Sites[0], MainCode.size());
         return fail("Camera instruction signature differs (game version or conflicting patch)");
+    }
+    std::array<bool, Sites.size()> rotation_patched{};
     for (unsigned i = 1; i < Sites.size(); ++i) {
-        if (!StoreInstruction(image + Sites[i]))
+        rotation_patched[i] = RotationPatch(image + Sites[i]);
+        if (!rotation_patched[i] && !StoreInstruction(image + Sites[i])) {
+            LogSignature(image, Sites[i], 9);
             return fail("Camera store signature differs (game version or conflicting patch)");
+        }
     }
     unsigned a, b, c, d;
     __cpuid(1, a, b, c, d);
@@ -212,6 +251,7 @@ bool Install(unsigned char* image, std::uint64_t size) {
         Xbyak::CodeGenerator code(4096, memory);
         using namespace Xbyak::util;
         for (unsigned i = 0; i < Sites.size(); ++i) {
+            if (rotation_patched[i]) continue;
             code.align(16);
             auto* start = code.getCurr();
             const auto displacement = reinterpret_cast<intptr_t>(start) -
@@ -265,6 +305,7 @@ bool Install(unsigned char* image, std::uint64_t size) {
     // All five sites were validated first. The loader owns writable image pages
     // and has not entered guest code, so the patch cannot race execution.
     for (unsigned i = 0; i < Sites.size(); ++i) {
+        if (rotation_patched[i]) continue;
         auto* p = image + Sites[i];
         p[0] = 0xe9;
         std::memcpy(p + 1, &jumps[i], 4);
@@ -274,7 +315,8 @@ bool Install(unsigned char* image, std::uint64_t size) {
     monocular_base = reinterpret_cast<uintptr_t>(image) + 0x553e8d0;
     problem = nullptr;
     available.store(true, std::memory_order_release);
-    std::puts("Mouse camera: verified startup hooks ready (F4); no polling thread");
+    std::printf("Mouse camera: verified startup hooks ready (F4); %u existing rotation-patch sites preserved; no polling thread\n",
+        unsigned(std::count(rotation_patched.begin(), rotation_patched.end(), true)));
     return true;
 #else
     (void)image; (void)size;

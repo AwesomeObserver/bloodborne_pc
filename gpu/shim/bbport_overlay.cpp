@@ -705,6 +705,35 @@ void FpsCounter() {
     ImGui::End();
 }
 
+void MouseCameraToast() {
+    const auto* viewport = ImGui::GetMainViewport();
+    const float margin = std::min(24.f * base_scale, viewport->WorkSize.x * .05f);
+    const float width = std::max(1.f, std::min(560.f * base_scale,
+                                             viewport->WorkSize.x - 2.f * margin));
+    const char* text = BbMouse::Problem();
+    if (!text) text = mouse_toast_enabled
+        ? BbSettings::MenuText("Mouse camera enabled (F4)", "Камера мышью включена (F4)")
+        : BbSettings::MenuText("Mouse camera disabled (F4)", "Камера мышью выключена (F4)");
+    const auto padding = ImGui::GetStyle().WindowPadding;
+    const float text_height = ImGui::CalcTextSize(text, nullptr, false,
+        std::max(1.f, width - 2.f * padding.x)).y;
+    const float height = std::max(1.f, std::min(text_height + 2.f * padding.y,
+                                              viewport->WorkSize.y - 2.f * margin));
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * .5f,
+                                  viewport->WorkPos.y + viewport->WorkSize.y - margin),
+                            ImGuiCond_Always, ImVec2(.5f, 1.f));
+    // Wrapped text needs a width on its very first frame. Auto-fitting both axes
+    // makes ImGui wrap to the minimum width and grow into a vertical column.
+    ImGui::SetNextWindowSize(ImVec2(width, height), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(.85f);
+    ImGui::Begin("##mouse_camera_toast", nullptr,
+                 ImGuiWindowFlags_NoDecoration |
+                 ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
+                 ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings);
+    ImGui::TextWrapped("%s", text);
+    ImGui::End();
+}
+
 } // namespace
 
 
@@ -946,20 +975,7 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
         TextEntryBox();
     }
     if (mouse_toast_until.load(std::memory_order_relaxed) > NowMs()) {
-        const auto* viewport = ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(ImVec2(viewport->WorkSize.x * .5f,
-                                      viewport->WorkSize.y - 24.f * base_scale),
-                                ImGuiCond_Always, ImVec2(.5f, 1.f));
-        ImGui::SetNextWindowBgAlpha(.85f);
-        ImGui::Begin("##mouse_camera_toast", nullptr,
-                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
-                     ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
-                     ImGuiWindowFlags_NoFocusOnAppearing);
-        if (const auto* reason = BbMouse::Problem()) ImGui::TextWrapped("%s", reason);
-        else ImGui::TextUnformatted(mouse_toast_enabled
-            ? BbSettings::MenuText("Mouse camera enabled (F4)", "Камера мышью включена (F4)")
-            : BbSettings::MenuText("Mouse camera disabled (F4)", "Камера мышью выключена (F4)"));
-        ImGui::End();
+        MouseCameraToast();
     }
     ImGui::Render();
 

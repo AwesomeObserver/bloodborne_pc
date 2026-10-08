@@ -133,6 +133,49 @@ static void Key(SDL_Keycode key, bool down, SDL_Keymod mod = SDL_KMOD_NONE) {
     assert(BbOverlay::HandleEvent(event));
 }
 
+static void ToastLayout() {
+    auto& io = ImGui::GetIO();
+    const ImVec2 previous_size = display_size;
+    const float previous_scale = BbOverlay::base_scale;
+    const ImGuiStyle previous_style = ImGui::GetStyle();
+    for (const ImVec2 size : {ImVec2(320, 180), ImVec2(640, 360),
+                             ImVec2(1280, 720), ImVec2(2560, 1440)}) {
+        const float scale = std::max(size.y / 1080.f, .75f);
+        ImGui::GetStyle() = previous_style;
+        ImGui::GetStyle().ScaleAllSizes(scale / previous_scale);
+        ImGui::GetStyle().FontScaleMain = scale;
+        BbOverlay::base_scale = scale;
+        for (int frame = 0; frame < 3; ++frame) {
+            io.DisplaySize = size;
+            io.DeltaTime = 1.f / 60;
+            ImGui::NewFrame();
+            // Check a nonzero work-area origin as well as ordinary resolutions.
+            auto* viewport = ImGui::GetMainViewport();
+            viewport->WorkPos = ImVec2(10, 10);
+            viewport->WorkSize = ImVec2(size.x - 20, size.y - 20);
+            BbOverlay::MouseCameraToast();
+            ImGui::Render();
+            const auto* toast = ImGui::FindWindowByName("##mouse_camera_toast");
+            if (toast && (toast->Pos.x + toast->Size.x > size.x - 9.f ||
+                          toast->Pos.y + toast->Size.y > size.y - 9.f))
+                std::fprintf(stderr, "Toast %.0fx%.0f frame %d: pos %.0f,%.0f size %.0f,%.0f work %.0f,%.0f %.0f,%.0f\n",
+                    size.x, size.y, frame, toast->Pos.x, toast->Pos.y,
+                    toast->Size.x, toast->Size.y, viewport->WorkPos.x, viewport->WorkPos.y,
+                    viewport->WorkSize.x, viewport->WorkSize.y);
+            assert(toast && toast->Size.x > 250.f);
+            assert(toast->Size.x < size.x && toast->Size.y < size.y - 20.f);
+            assert(toast->Pos.x >= viewport->WorkPos.x);
+            assert(toast->Pos.y >= viewport->WorkPos.y);
+            assert(toast->Pos.x + toast->Size.x <= size.x - 10.f + 1.f);
+            assert(toast->Pos.y + toast->Size.y <= size.y - 10.f + 1.f);
+            assert((toast->Flags & ImGuiWindowFlags_NoInputs) == ImGuiWindowFlags_NoInputs);
+        }
+    }
+    ImGui::GetStyle() = previous_style;
+    BbOverlay::base_scale = previous_scale;
+    display_size = previous_size;
+}
+
 int main() {
     char path[4096];
     const int fd = bb_test_temp(path, sizeof(path), "bbport-overlay-test");
@@ -208,10 +251,23 @@ int main() {
     const unsigned char camera_store[]{0xc4,0xc1,0x7a,0x11,0x95,0x40,1,0,0};
     for (auto offset : {0x143c6e8, 0x143c984, 0x143dde6, 0x143c870})
         std::memcpy(camera_image + offset, camera_store, sizeof(camera_store));
+    const std::uint32_t rotation_state = 0x294;
+    std::memcpy(camera_image + 0x143c6e8 + 5, &rotation_state, 4);
+    camera_image[0x143c984] ^= 1;
+    assert(!BbMouse::Install(camera_image, 0x5540000));
+    ToastLayout(); // the actual long failure message, on its first visible frame
+    camera_image[0x143c984] ^= 1;
     assert(BbMouse::Install(camera_image, 0x5540000));
 #endif
 
     auto& s = BbSettings::Get();
+    s.menu_language = BbSettings::MenuLanguage::English;
+    BbOverlay::mouse_toast_enabled = true;
+    ToastLayout();
+    BbOverlay::mouse_toast_enabled = false;
+    ToastLayout();
+    s.menu_language = BbSettings::MenuLanguage::Russian;
+    ToastLayout();
     s.menu_language = BbSettings::MenuLanguage::English;
     s.dlss_supported = s.fsr4_supported = s.fsr411_supported = true;
     s.fsr_fg_supported = s.dlss_fg_supported = true;
@@ -405,5 +461,5 @@ int main() {
     BbOverlay::initialized = false;
     unlink(path);
     std::puts("PASS: SDL mouse controls, exact value entry, full graphics menu, scrolling, "
-              "resize, persistence and input reset");
+              "resize, persistence, input reset and bounded F4 notifications");
 }

@@ -19,6 +19,10 @@ constexpr std::size_t ImageSize = 0x5540000;
 constexpr std::array<std::size_t, 5> Sites{0x143ceaa, 0x143c6e8, 0x143c984, 0x143dde6, 0x143c870};
 constexpr unsigned char Loads[]{0xc4,0xc1,0x7a,0x10,0x85,0x40,1,0,0,
                                0xc4,0xc1,0x7a,0x10,0x8d,0x50,1,0,0};
+// Include the rotation-state fields missing from the original validator, not
+// four copies of a store to +140. See docs/mouse-camera-windows.md for references.
+std::array<std::uint32_t,4> StoreOffsets{0x130,0x294,0x140,0x150};
+std::array<bool,4> rotation_patched{};
 struct Report {
     float pitch, smooth;
     std::uint64_t flags, r10;
@@ -63,10 +67,10 @@ struct Caller : Xbyak::CodeGenerator {
     }
 };
 
-template<class T> void Put(std::array<unsigned char, 0x280>& camera, std::size_t at, T value) {
+template<std::size_t N, class T> void Put(std::array<unsigned char, N>& camera, std::size_t at, T value) {
     std::memcpy(camera.data() + at, &value, sizeof(value));
 }
-float Get(const std::array<unsigned char, 0x280>& camera, std::size_t at) {
+template<std::size_t N> float Get(const std::array<unsigned char, N>& camera, std::size_t at) {
     float value;
     std::memcpy(&value, camera.data() + at, sizeof(value));
     return value;
@@ -79,7 +83,9 @@ void Check(const Report& report) {
     assert(!std::memcmp(report.ymm.data(), Pattern.data(), 32)); // including YMM upper half
 }
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc > 1 && !std::strcmp(argv[1], "convergence"))
+        StoreOffsets = {0x26c,0x270,0x144,0x150};
     auto* image = static_cast<unsigned char*>(VirtualAlloc(nullptr, ImageSize,
         MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
     assert(image);
@@ -87,6 +93,7 @@ int main() {
     image[Sites[0] + sizeof(Loads)] = 0xc3;
     for (unsigned i = 1; i < Sites.size(); ++i) {
         unsigned char store[]{0xc4,0xc1,0x7a,0x11,0x95,0x40,1,0,0};
+        std::memcpy(store + 5, &StoreOffsets[i - 1], 4);
         std::memcpy(image + Sites[i], store, 9);
         image[Sites[i] + 9] = 0xc3;
     }
@@ -97,7 +104,31 @@ int main() {
         assert(image[Sites[0]] == (bad ? 0xc4 : 0xc5));
         image[Sites[bad]] ^= 1;
     }
+    // Semantically unsafe or partial instructions must still reject the entire
+    // image. Never accept arbitrary nine-byte replacements just to enable F4.
+    const std::array<std::array<unsigned char,9>,6> invalid{{
+        {0xc4,0xc1,0x7a,0x11,0x97,0x40,1,0,0}, // R15, not the live camera R13
+        {0xc4,0xc1,0x7a,0x10,0x95,0x40,1,0,0}, // load, not a store
+        {0xc4,0xc1,0x7a,0x11,0x95,0x38,1,0,0}, // unrelated field +138
+        {0xc5,0xfa,0x11,0x15,0x40,1,0,0,0x90}, // RIP-relative, wrong length
+        {0x49,0x89,0x85,0x40,1,0,0,0x90,0x90}, // integer store
+        {0x90,0x90,0x90,0x90,0x90,0x90,0x90,0x90,0xcc}, // partial NOP patch
+    }};
+    std::array<unsigned char,9> saved{};
+    std::memcpy(saved.data(), image + Sites[1], 9);
+    for (const auto& bytes : invalid) {
+        std::memcpy(image + Sites[1], bytes.data(), 9);
+        assert(!BbMouse::Install(image, ImageSize));
+        assert(!std::memcmp(image + Sites[0], Loads, sizeof(Loads)));
+        assert(!std::memcmp(image + Sites[1], bytes.data(), 9));
+    }
+    std::memcpy(image + Sites[1], saved.data(), 9);
     assert(!BbMouse::Install(image, 256));
+    for (unsigned i = 0; i < rotation_patched.size(); ++i) {
+        rotation_patched[i] = argc > 1 && (!std::strcmp(argv[1], "patched") ||
+                              (!std::strcmp(argv[1], "mixed") && i % 2 == 0));
+        if (rotation_patched[i]) std::memset(image + Sites[i + 1], 0x90, 9);
+    }
     assert(BbMouse::Install(image, ImageSize) && BbMouse::Available());
     std::array<std::array<unsigned char,18>,5> installed{};
     for (unsigned i = 0; i < Sites.size(); ++i)
@@ -113,7 +144,7 @@ int main() {
         stores[i] = store_callers[i]->getCode<Run>();
     }
     auto run = main_caller.getCode<Run>();
-    std::array<unsigned char, 0x280> camera{};
+    std::array<unsigned char, 0x300> camera{};
     Put(camera, 0x140, .2f); Put(camera, 0x144, .3f); Put(camera, 0x150, .2f);
     Put(camera, 0x1f0, -1.94f); Put(camera, 0x1ec, 1.71f);
     Report report{};
@@ -122,12 +153,14 @@ int main() {
     BbMouse::Motion(90,45);
     run(camera.data(), &report);
     assert(report.pitch == .2f); Check(report);
-    for (auto store : stores) {
-        Put(camera, 0x140, .2f);
-        store(camera.data(), &report);
-        assert(Get(camera, 0x140) == .875f); Check(report);
+    for (unsigned i = 0; i < stores.size(); ++i) {
+        Put(camera, StoreOffsets[i], .2f);
+        stores[i](camera.data(), &report);
+        assert(Get(camera, StoreOffsets[i]) == (rotation_patched[i] ? .2f : .875f));
+        Check(report);
     }
     Put(camera, 0x140, .2f);
+    Put(camera, 0x144, .3f); Put(camera, 0x150, .2f);
     BbMouse::SetActive(true);
     BbMouse::Motion(90,45);
     run(camera.data(), &report);
@@ -135,18 +168,23 @@ int main() {
     assert(std::abs(report.pitch - .25f) < 1e-6f && report.smooth == report.pitch);
     assert(std::abs(Get(camera, 0x144) - .4f) < 1e-6f);
     assert(Get(camera, 0x26c) == report.pitch && Get(camera, 0x270) == Get(camera, 0x144));
-    for (auto store : stores) {
-        store(camera.data(), &report);
-        assert(Get(camera, 0x140) == .25f); // camera auto-rotation stores suppressed
+    for (unsigned i = 0; i < stores.size(); ++i) {
+        Put(camera, StoreOffsets[i], .25f);
+        stores[i](camera.data(), &report);
+        assert(Get(camera, StoreOffsets[i]) == .25f); // auto-rotation suppressed
+        Check(report);
     }
+    Put(camera, 0x144, .4f);
     Put(camera, 0x154, 1.f);
     BbMouse::Motion(900,900);
     run(camera.data(), &report);
     assert(Get(camera, 0x144) == .4f);
-    for (auto store : stores) {
-        store(camera.data(), &report);
-        assert(Get(camera, 0x140) == .875f); // lock-on restores the game stores
+    for (unsigned i = 0; i < stores.size(); ++i) {
+        stores[i](camera.data(), &report);
+        assert(Get(camera, StoreOffsets[i]) == (rotation_patched[i] ? .25f : .875f));
+        Check(report); // lock-on restores game stores; existing NOPs stay NOPs
     }
+    Put(camera, 0x144, .4f);
     Put(camera, 0x154, 0.f);
     run(camera.data(), &report);
     assert(Get(camera, 0x144) == .4f); // no buffered jump after unlocking
