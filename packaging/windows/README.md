@@ -1,7 +1,8 @@
-# bbport v2 on Windows
+# Enhanced Native Bloodborne Port for Windows — Build guide
 
-The port builds and runs natively on 64-bit Windows 10 (1903+) / 11 with the same sources as
-on Linux. Players: see `README-Windows.txt` (it ships in the package).
+Build and package **v2** for 64-bit Windows 10 (1903+) / 11. Players: see the
+[quick start](../../README.md#quick-start) or [README-Windows.txt](README-Windows.txt)
+(included in Windows archives).
 
 ## Build
 
