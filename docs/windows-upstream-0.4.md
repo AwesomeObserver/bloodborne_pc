@@ -84,7 +84,7 @@ System V ABI на хосте Win64. Windows-часть обеспечивает 
 После сборки подмодуль `fsr-vulkan` содержит два ожидаемых изменения из
 `gpu/patches/fsr-vulkan/`: `build.sh` применяет эти сохранённые патчи автоматически.
 Проверено с Clang 22.1.8, SDL 3.4.18, Vulkan headers 1.4.363,
-FFmpeg 9.0.2 на Windows и NVIDIA GeForce RTX 2080 SUPER.
+FFmpeg 9.0.2 на Windows.
 
 - Собраны `bb-probe.exe`, `bb-gpu-capabilities.exe`, `bb-play.exe`.
 - Собран `bbport_dlss.dll` через MSVC 19.44 и официальный NVIDIA DLSS SDK

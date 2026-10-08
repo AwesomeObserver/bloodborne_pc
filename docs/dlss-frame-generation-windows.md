@@ -11,7 +11,7 @@ view uses the HDR precision path instead of the encoded LDR path.
 
 The jitter sign remains positive. A real NGX test reconstructing a stationary
 high-frequency pattern measured MSE 0.00017311 with positive jitter and 0.00474968
-with negative jitter on RTX 2080 SUPER. Flipping the sign would make reconstruction
+with negative jitter. Flipping the sign would make reconstruction
 about 27 times worse in this test. These numbers validate the sampling convention;
 they are not a measurement of Bloodborne's visual quality.
 
@@ -43,7 +43,7 @@ The accompanying swapchain fixes consume suboptimal acquisitions correctly and
 reset image indices after recreation. The device-owned diagnostic marker buffer
 is also released at shutdown.
 
-## Using it on RTX 4080 at 2560×1440
+## Configuration
 
 1. Select **Output resolution: 2560×1440**. The default 1920×1080 output would be
    stretched again on a 1440p display, regardless of the selected DLSS preset.
@@ -68,18 +68,18 @@ The GPU regression tests execute actual provider shaders and read the output bac
 - Explicit history reset, disable/re-enable and output resizing in both directions.
 - Threaded recording with asynchronous submissions, 42 real Win32 swapchain
   presentations and window resize. Khronos core and synchronization validation
-  report no Vulkan errors on RTX 2080 SUPER.
+  report no Vulkan errors in the test environment.
 
 The Windows archive includes `bin\bb-framegen-test.exe`. Run it from a terminal
-with argument `dlss` to exercise DLSS FG on a supported RTX GPU without game files;
+with argument `dlss` to exercise DLSS FG without game files;
 no argument tests FSR, and `window` also tests the Windows swapchain. Exit code 77
 means the selected provider is unavailable; a passing interpolation test prints
 `PASS` and exits with code 0.
 
-DLSS FG execution requires supported hardware and is skipped on this computer's
-RTX 2080 SUPER. Its bridge compiles with MSVC, and the real NGX capability query
-correctly rejects this GPU. **Gameplay and DLSS FG on RTX 4080 still require a
-playtest**; no game dump is available on the build computer. Synthetic GPU tests
+The DLSS FG execution test was skipped because NGX reported the feature as
+unavailable in the test environment. Its bridge compiles with MSVC, and the real
+NGX capability query is checked. **Gameplay and DLSS FG still require a playtest**;
+no game dump was available during validation. Synthetic GPU tests
 cannot establish the absence of artifacts in every Bloodborne scene or guarantee
 twice the frame rate. The archive also includes the previous crash-dispatch fixes
 and Windows minidump capture; see [crash analysis](crash-analysis-windows-v1.5.md).

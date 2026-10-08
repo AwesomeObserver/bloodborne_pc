@@ -1,5 +1,3 @@
-THIS PROJECT IS NOT RELATED TO SHADPS4. ALL QUESTIONS RELATED TO THIS PROJECT SHOULD BE SENT TO THE DISCORD SERVER https://discord.gg/KYZRKk9CB, NOT TO THE SHADPS4 SERVER.
-
 
 # bbport — a native Linux port of Bloodborne
 
@@ -26,8 +24,7 @@ reading of resource descriptors (textures, buffers) from the CPU to the GPU (see
 
 **Status: experimental, playable.** The game boots, loads saves and plays (the Hunter's Dream
 and several areas of Yharnam were played with it) with sound, gamepad and saving.
-A full play-through has not been verified, and only one machine (Linux, AMD Radeon RX 7800 XT,
-Mesa/RADV) has been tested thoroughly.
+A full play-through has not been verified, and only one machine (Linux, Mesa/RADV) has been tested thoroughly.
 
 ## Highlights
 
@@ -46,31 +43,31 @@ Mesa/RADV) has been tested thoroughly.
     (`WRITE_DATA`, DMA) are done by the GPU in command-stream order, and fences are written once
     the GPU has really finished the work. Where the game is CPU-bound it runs 20–25% faster
     (measured standing in the Hunter's Dream), with fewer stutters. **It may crash**, and has
-    been tested thoroughly only on the author's PC (RX 7800 XT). On NVIDIA and Intel the switch
+    been tested thoroughly only in the test environment. On NVIDIA and Intel the switch
     is unavailable: NVIDIA's driver cannot map the game's memory as needed, Intel is untested.
     Without the launcher: `BB_PC_MODEL=1`; to try it on another GPU: `BB_PC_MODEL_ANY_GPU=1`.
 
   Unused textures are freed in both modes, so VRAM no longer grows with every area visited.
 - **Unlocked frame rate.** Community patches (`patches/Bloodborne.xml`) make the simulation
-  use the real frame time; ~90 FPS at 4K with FSR 4 Balanced on an RX 7800 XT, ~150 FPS at
+  use the real frame time; ~90 FPS at 4K with FSR 4 Balanced in the test environment, ~150 FPS at
   1440p with FSR 4 Quality. Also 30/60/90 FPS modes.
 - **Temporal upscaling built for this game.** Bloodborne has no velocity buffer, so bbport
   computes motion vectors itself: camera motion from depth and the scene matrices, and object
   motion (characters, cloth, weapons) from the vertex positions of the previous frame. The
   scene is jittered sub-pixel (Halton) and rendered at a reduced resolution; the upscaler fills
-  the output (720p for the Steam Deck, 1080p, 1440p or 2160p) and the UI is drawn natively at the output resolution.
+  the output (720p for the portable test system, 1080p, 1440p or 2160p) and the UI is drawn natively at the output resolution.
   - **FSR 3.1** (FireBurn/FSR-Vulkan).
   - **FSR 4 (INT8, model v07)** on GPUs exposing the required Vulkan shader features —
     RDNA2/3 included (see Requirements).
   - **FSR 4.1.1**: AMD's 4.1.1 DLL is recorded once under vkd3d-proton and its passes are
     replayed natively on Vulkan; the output is **bit-exact** with the DLL. Two variants, as in
-    the DLL: INT8 on any GPU with the required shader features, and FP8 matrices on RDNA4 (RX
-    9000; picked automatically). The assets are built on your machine from one DLL of your own
+    the DLL: INT8 on any GPU with the required shader features, and FP8 matrices on RDNA4
+    (picked automatically). The assets are built on your machine from one DLL of your own
     (4.1.x): the launcher's *FSR 4.1.1 from your own AMD DLL → Choose DLL…* button (2–5 minutes,
     twice that on RDNA4; needs a recent Proton), or `tools/fsr4cap`.
   - Faster than AMD's own shaders on RDNA3: the final passes of FSR 4 and 4.1.1 were rewritten
     to store through workgroup memory (3.5× and 2.3× faster, bit-exact); FSR 4 costs ~4 ms at
-    4K on an RX 7800 XT instead of ~6 ms.
+    4K in the test environment instead of ~6 ms.
 - **Multi-threaded GPU command processing.** The PS4 command stream is decoded on one thread
   and draws are bound and recorded on another (two-stage pipeline), with a Vulkan recording
   thread and helper threads for memory copies. Early on the single GPU thread capped the game
@@ -78,7 +75,7 @@ Mesa/RADV) has been tested thoroughly.
 - **In-game menu** (Insert or L3+R3): upscaler, preset, sharpness, output resolution, game
   effects (chromatic aberration, DoF, motion blur, SSAO, the game's own AA, SSR, model LOD).
   It opens where it was left, with the mouse cursor shown over it.
-- **GTK4 launcher** and an **AppImage** for the Steam Deck.
+- **GTK4 launcher** and an **AppImage** for the portable test system.
 
 ## How it differs from shadPS4
 
@@ -90,7 +87,7 @@ Mesa/RADV) has been tested thoroughly.
 | Command processor | Emulated: memory writes, DMA and fences are done by the CPU while decoding | By default the same; in the new mode translated into Vulkan commands that the GPU runs in stream order, fences written after the work has really finished |
 | System libraries | Broad HLE of the PS4 OS | A small runtime (`src/runtime_*.c`) that implements exactly what Bloodborne calls: memory, threads, sync, files, audio (incl. ATRAC9), pad, saves, AppContent |
 | GPU | shadPS4 video core and shader recompiler | The same core (vendored, GPL) with ~200 marked changes (`bbport:`) plus new modules: two-stage draw pipeline, render-state and texture-set memoization, render-scale proxies, motion vectors, FSR 3.1/4/4.1.1, frame capture and GPU profiler |
-| GPU thread | One thread processes the whole command stream (the bottleneck in Bloodborne) | Decode and draw recording run on separate threads; the work scales with the hardware threads (Steam Deck included) |
+| GPU thread | One thread processes the whole command stream (the bottleneck in Bloodborne) | Decode and draw recording run on separate threads; the work scales with the hardware threads (portable test system included) |
 | Upscaling | — | Temporal (FSR 3.1, FSR 4, FSR 4.1.1) with the game's own motion vectors and jitter |
 | Game patches | Patch files applied by the emulator | The same community patches, compiled at start (`scripts/patches.py`); render resolution, effects and FPS from the launcher |
 
@@ -120,7 +117,7 @@ neither has nor includes.
 
 ## Requirements
 
-- Linux x86-64, a Vulkan 1.3 GPU. Tested: AMD RX 7800 XT with Mesa 26 (RADV).
+- Linux x86-64, a Vulkan 1.3 GPU. Tested with Mesa 26 (RADV).
   The *New memory and translation model* mode needs an AMD GPU.
   FSR 4 / 4.1.1 require shader Float16, Int8/Int16, integer dot products, linear compute
   derivatives and extended storage image formats; FSR 4.1.1 additionally requires
@@ -136,7 +133,7 @@ neither has nor includes.
 ## Build and run
 
 ```bash
-git clone --recursive https://github.com/deadinside28/bloodborne_pc.git bbport && cd bbport
+git clone --recursive https://github.com/AwesomeObserver/bloodborne_pc.git bbport && cd bbport
 bash build.sh                        # builds out/bb-probe and out/gpu/libbbgpu.so
 BB_GAME_DIR=/path/to/CUSA03173 bash run.sh
 ```
@@ -151,12 +148,12 @@ By default the game folder is expected next to the repository (`../CUSA03173`). 
 shader cache go to `user/` (the launcher lets you choose another folder); settings to
 `bbport.ini`. A gamepad is used through SDL3 (the launcher's *Controls → Controller* picks one
 when several are connected; `BB_GAMEPAD=<GUID or part of the name>`). The keyboard works too,
-also next to a connected gamepad (the Steam Deck always has one); both are remapped in the
+also next to a connected gamepad; both are remapped in the
 launcher (*Controls*). The character name is typed on the keyboard in a box over the game.
 The touchpad: its left half (Tab, Back/Select) opens the gestures, the right half (Backspace)
 the key items.
 
-**Resolution and preset changes:** for outputs other than 1080p (720p on the Steam Deck,
+**Resolution and preset changes:** for outputs other than 1080p (720p on the portable test system,
 1440p, 4K) the whole game renders at the preset's resolution, set by a patch at start — the
 fastest path. Changing the output or the preset in the in-game menu then needs *Apply and
 restart the game*. The *Live resolution changes* setting (launcher, in-game menu,
@@ -225,7 +222,7 @@ October 2026; Steam's Proton 11.0 and GE-Proton 9 do not). It runs in the Steam 
 requires (Steam installs it the first time any game runs with that Proton), or through
 umu-launcher when installed. On NixOS umu-launcher comes from `nix-shell` (downloaded the first
 time, ~1.7 GB); the AppImage runs the recording on the system itself, through the user's systemd
-(`systemd-run --user`), since the system's `/nix` is out of its sight. Recording on the Steam Deck is not verified yet; if the DLL does not
+(`systemd-run --user`), since the system's `/nix` is out of its sight. Recording on the portable test system is not verified yet; if the DLL does not
 enable FSR 4.1 there, build on a PC and copy the `fsr4_411` folder. The same from the command
 line: the launcher's (and the AppImage's) `--build-fsr411 <DLL>`.
 
@@ -236,15 +233,15 @@ SPIRV-Tools, Git) or from Nix; the AppImage has them prebuilt.
 another variant of its passes: other shaders and weights, other dispatch sizes. The build records
 both, INT8 into `fsr4_411/` and FP8 into `fsr4_411/fp8/`, and the game picks FP8 itself when the
 GPU has FP8 matrices (`VK_EXT_shader_float8`); the log says `Upscaler: FSR 4.1.1 replay, FP8 …`.
-`BB_FSR411_VARIANT=int8` forces INT8. Checked on an RX 7800 XT through vkd3d-proton's FP16
+`BB_FSR411_VARIANT=int8` forces INT8. Checked in the test environment through vkd3d-proton's FP16
 emulation of FP8 (`BB_FSR4CAP_FP8=1` records it there too, `fp8emu/`): bit-exact with the DLL;
 **not yet run on RDNA4 hardware.**
 
-**AppImage** (Steam Deck): `bash build.sh && bash packaging/appimage.sh` →
+**AppImage**: `bash build.sh && bash packaging/appimage.sh` →
 `dist/Bloodborne-bbport-x86_64.AppImage`; data in `~/.local/share/bbport`, `--play` starts the
 game without the launcher window (Game Mode). FSR 4.1.1 models are not packaged: build them with
 the launcher's button (see above); they go to `~/.local/share/bbport/fsr4_411`
-(`BB_PACKAGE_FSR411=1` bundles a local `fsr4_411` into an AppImage for your own devices). On the Steam Deck pick the 1280×720 output (the
+(`BB_PACKAGE_FSR411=1` bundles a local `fsr4_411` into an AppImage for your own devices). On the portable test system pick the 1280×720 output (the
 game is 16:9; on the 1280×800 screen it gets thin bars).
 
 **Adding the AppImage to Steam** (*Add a Non-Steam Game*) needs no options; the compatibility tool
@@ -275,11 +272,11 @@ the package with:
 ./Bloodborne-bbport-x86_64.AppImage --vulkan-info 2>&1 | tee bbport-vulkan.log
 ```
 
-A user reported successful startup with FSR 3 on a GTX 1060 6GB (Fedora 44, NVIDIA
+A user reported successful startup with FSR 3 on a test adapter (Fedora 44, NVIDIA
 580.178.04); selecting FSR 4 caused a black window. Use FSR 3 on this configuration.
 
 MangoHud is bundled in the AppImage; enable its checkbox in the launcher. If MangoHud is also
-installed system-wide, or Steam's performance overlay is on (Steam Deck game mode), only one
+installed system-wide, or Steam's performance overlay is on (portable test system game mode), only one
 overlay is drawn (two drew doubled, offset text).
 When running from source, install MangoHud separately. A diagnostic launch with
 `VK_LOADER_LAYERS_DISABLE=~implicit~` also disables MangoHud.
@@ -329,7 +326,7 @@ Tests: `bash build.sh --test`, `python3 -m unittest discover -s tests`, and
   address.
 - Shaders translated ahead of time, at install, not during play.
 - More CPU parallelism in GPU command processing (split the draw-recording stage further),
-  scaling to all hardware threads — most important for the Steam Deck.
+  scaling to all hardware threads — most important for the portable test system.
 - Async compute for the upscaler (the frame is GPU-bound at 4K).
 - XeSS (super resolution) and XeFG frame generation through a Wine helper sharing Vulkan
   memory (a memory-bridge prototype is in `tools/bridge_helper`); DLSS for NVIDIA users;
@@ -337,7 +334,7 @@ Tests: `bash build.sh --test`, `python3 -m unittest discover -s tests`, and
 - Frame generation (FSR 3.1 FG first), reactive and transparency masks for particles and fog.
 - Fix the races in AMD's FSR 4.1.1 shaders at output widths that are not multiples of 64
   (e.g. 1600×900), as already done for the left-edge race in FSR 4 v07 at 1080p.
-- Steam Deck validation of the AppImage; HDR output.
+- AppImage validation on portable systems; HDR output.
 
 ## Credits and licenses
 

@@ -52,8 +52,8 @@ Problems
 - Send user\last_run.log with any bug report.
 
 Upscaling
-- DLSS: NVIDIA GeForce RTX 20 series or newer with a current driver (Graphics -> Upscaler ->
-  DLSS, or the in-game menu). On other GPUs the option is greyed out.
+- DLSS: available when the NVIDIA runtime reports support (Graphics -> Upscaler ->
+  DLSS, or the in-game menu). Otherwise the option is greyed out.
 - FSR 3.1 works on every GPU. FSR 4 needs its assets in fsr4_shaders\ (included in this
   package, or Graphics -> "Download FSR 4 assets"); GPUs without the required shader features
   fall back to FSR 3.1 by themselves.
@@ -69,7 +69,5 @@ Mods and patches
 - Third-party patches: shadPS4/GoldHEN XML files for 1.09 in patches\.
 
 Credits
-- bbport (the Linux port this is built on): https://github.com/deadinside28/bloodborne_pc
-- Windows port: https://github.com/Supermedo/bloodborne_pc
-- This fork: https://github.com/AwesomeObserver/bloodborne_pc (upstream 0.4 migration).
+- Project: https://github.com/AwesomeObserver/bloodborne_pc
 - The full list of projects and patch authors is in README.md (Credits and licenses).

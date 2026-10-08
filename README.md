@@ -1,6 +1,6 @@
 # Bloodborne for Windows
 
-**Bloodborne running natively on Windows 10 and 11, by [Supermedo](https://github.com/Supermedo) Mohammed Albarghouthi.**
+**Bloodborne running natively on Windows 10 and 11.**
 
 The original PlayStation 4 game runs directly on your PC: its own x86-64 code runs natively,
 and the graphics are translated to Vulkan. No emulator window, no setup scripts: unpack the zip,
@@ -9,7 +9,7 @@ start `Bloodborne.exe`, pick your game folder and press **PLAY**.
 Windows fork: [AwesomeObserver/bloodborne_pc](https://github.com/AwesomeObserver/bloodborne_pc).
 Updated to upstream **0.4** (`daa7165`); see the [migration and validation report](docs/windows-upstream-0.4.md).
 
-**[Download the latest version](https://github.com/AwesomeObserver/bloodborne_pc/releases/latest)** · **[Join the Discord](https://discord.gg/yTMG8c4Bqm)**
+**[Download the latest version](https://github.com/AwesomeObserver/bloodborne_pc/releases/latest)**
 
 > **No game files are included.** You need your own decrypted dump of Bloodborne
 > (CUSA03173), updated to **1.09**, with the supported decrypted executable.
@@ -22,7 +22,7 @@ Updated to upstream **0.4** (`daa7165`); see the [migration and validation repor
   Spanish, Portuguese, French, German, Italian, Polish, Turkish, Chinese, Japanese, Korean.
 - **Updates from the launcher:** when a new version is out it tells you, and **Update**
   installs it. Your saves, settings and mods are kept.
-- **NVIDIA DLSS** on GeForce RTX cards (RTX 20 series and newer).
+- **NVIDIA DLSS**, available when the runtime reports support.
 - **AMD FSR 3.1, FSR 4 and FSR 4.1.1/FP8** upscaling (matching GPU features and assets required), plus native-resolution TAA.
 - **Remappable keyboard and controller**, controller selection and working touchpad gestures.
 - **Unlocked frame rate** with a frame cap (up to 120 by default), or 30/60/90 FPS.
@@ -43,7 +43,7 @@ Updated to upstream **0.4** (`daa7165`); see the [migration and validation repor
 - Windows 10 (1903 or later) or Windows 11, 64-bit
 - A graphics card with Vulkan 1.3 and a current driver
 - About 6 GB of free memory (RAM + page file), 10 GB for 1440p or 4K output
-- DLSS: NVIDIA GeForce RTX 20 series or newer
+- Optional DLSS features require support reported by the NVIDIA runtime.
 
 Nothing else to install: everything the game needs is in the zip.
 
@@ -69,8 +69,8 @@ Keyboard: WASD move, arrows camera, Space Cross, Left Shift Circle, E Square, Q 
 
 ## Problems and feedback
 
-Ask on the [Discord server](https://discord.gg/yTMG8c4Bqm), or open an [issue](https://github.com/AwesomeObserver/bloodborne_pc/issues) and attach
-`user\last_run.log` from the game folder, with your graphics card and what happened.
+Open an [issue](https://github.com/AwesomeObserver/bloodborne_pc/issues), describe what happened
+and attach `user\last_run.log` from the game folder.
 If the game shows only a black screen, try **Advanced → Clear shader cache** first.
 
 ## Building from source
@@ -81,9 +81,7 @@ then `bash packaging/windows/package.sh`. DLSS is built separately with
 
 ## Credits
 
-Built on [bbport](https://github.com/deadinside28/bloodborne_pc), the native Linux port of
-Bloodborne by deadinside28, and on the [shadPS4](https://github.com/shadps4-emu/shadPS4)
-renderer. The original README is in [docs/original-readme](docs/original-readme/README.md).
+Uses the [shadPS4](https://github.com/shadps4-emu/shadPS4) renderer.
 
 Also used: [FSR-Vulkan](https://github.com/FireBurn/FSR-Vulkan) and the AMD FidelityFX SDK
 (FSR), FSR 4 assets from [FireBurn/Q2RTX](https://github.com/FireBurn/Q2RTX), the DLSS bridge
@@ -98,7 +96,7 @@ the [NVIDIA DLSS SDK](https://github.com/NVIDIA/DLSS) (`nvngx_dlss.dll` under NV
 and [Pillow](https://python-pillow.org). Game patches by Kyo, Lance McDonald, auser1337,
 illusion, emoose and the Bloodborne community.
 
-NVIDIA, GeForce RTX and DLSS are trademarks of NVIDIA Corporation. The icon is original
+NVIDIA and DLSS are trademarks of NVIDIA Corporation. The icon is original
 artwork.
 
 ## License
