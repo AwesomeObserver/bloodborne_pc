@@ -119,6 +119,7 @@ port's data folder. **Advanced → Save session log** enables additional session
 - [Windows crash analysis](docs/crash-analysis-windows-v1.5.md)
 - [October 8 gameplay crash investigation](docs/crash-analysis-2026-10-08.md)
 - [Vulkan command-data crash and missing dump fix](docs/crash-analysis-2026-10-09.md)
+- [Respawn loading investigation and capture](docs/respawn-loading-windows.md)
 
 ## Credits & license
 

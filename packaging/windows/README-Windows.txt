@@ -152,5 +152,15 @@ changing direction, opposite keys and menu capture cancel it immediately.
 The user confirmed that adding a strafe key works in either axis order.
 The release correction needs gameplay confirmation. Raw mouse camera is unchanged.
 
+Respawn loading diagnostics: run Trace Respawn Loading.cmd.
+With the game focused, press F8 before choosing Continue, then F8 when the character
+is controllable. After a death, press F8 when the loading screen appears, then F8
+when the respawned character is controllable. Repeat for two deaths and close the game.
+Send the loading-*.zip from logs\ under the port's data folder.
+This compares native process/thread CPU and logical I/O counters with existing frame,
+GPU readback and wait logs. It measures the delay; it does not apply a respawn fix.
+Diagnostic logging can affect timings; use the same mode for both loading paths.
+The report includes logs and paths, but does not copy saves, settings or game assets.
+
 GNU GPL v2 or later. See LICENSE, licenses\ and README.md for third-party credits.
 Not affiliated with Sony Interactive Entertainment or FromSoftware.
