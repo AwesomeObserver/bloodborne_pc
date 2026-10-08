@@ -266,19 +266,6 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
         return false;
     }
 
-    std::vector<u32> spv{};
-    Storage::DataBase::Instance().Load(Storage::BlobType::ShaderBinary,
-                                       fmt::format("{:#018x}_{}", program->info.pgm_hash, perm_idx),
-                                       spv);
-    // bbport: a SPIR-V binary starts with its magic number and a 5-word header; anything else is
-    // a damaged file (crash or power loss while it was written) the driver must not see.
-    if (spv.size() < 5 || spv[0] != 0x07230203u) {
-        if (!spv.empty()) {
-            throw Serialization::CorruptData{"damaged SPIR-V in the shader cache"};
-        }
-        return false;
-    }
-
     // Permutation hash depends on shader variation index. To prevent collisions, we need insert it
     // at the exact position rather than append
 
@@ -286,6 +273,17 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
     // bbport: a module the driver rejects is a damaged entry (WarmUp rebuilds the cache), not a
     // fatal error as in CompileSPV.
     const auto compile = [&] {
+        // Shared stages occur in many pipeline keys. Reuse a loaded module before
+        // opening and allocating another copy of its SPIR-V file.
+        std::vector<u32> spv;
+        Storage::DataBase::Instance().Load(Storage::BlobType::ShaderBinary,
+            fmt::format("{:#018x}_{}", program->info.pgm_hash, perm_idx), spv);
+        if (spv.size() < 5 || spv[0] != 0x07230203u) {
+            if (!spv.empty()) {
+                throw Serialization::CorruptData{"damaged SPIR-V in the shader cache"};
+            }
+            return vk::ShaderModule{};
+        }
         auto [result, created] = instance.GetDevice().createShaderModule(
             {.codeSize = spv.size() * sizeof(u32), .pCode = spv.data()});
         if (result != vk::Result::eSuccess) {
@@ -294,10 +292,15 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
         return created;
     };
 
-    auto [it_pgm, new_program] = program_cache.try_emplace(program->info.pgm_hash);
-    if (new_program) {
+    auto it_pgm = program_cache.find(program->info.pgm_hash);
+    if (it_pgm == program_cache.end()) {
         module = compile();
-        it_pgm.value() = std::move(program);
+        if (!module) {
+            return false;
+        }
+        // A missing/rejected binary must never leave an empty program entry.
+        const auto hash = program->info.pgm_hash;
+        it_pgm = program_cache.try_emplace(hash, std::move(program)).first;
     } else {
         const auto& it = std::ranges::find(it_pgm.value()->modules, spec, &Program::Module::spec);
         if (it != it_pgm.value()->modules.end()) {
@@ -315,8 +318,12 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
             module = it->module;
         } else {
             module = compile();
+            if (!module) {
+                return false;
+            }
         }
     }
+    spec.info = &it_pgm.value()->info;
     it_pgm.value()->InsertPermut(module, std::move(spec), perm_idx);
 
     sel.infos[stage] = &it_pgm.value()->info;

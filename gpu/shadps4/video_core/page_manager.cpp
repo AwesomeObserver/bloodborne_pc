@@ -296,7 +296,11 @@ struct PageManager::Impl {
 
     static bool GuestFaultSignalHandler(void* context, void* fault_address) {
         const auto addr = reinterpret_cast<VAddr>(fault_address);
-        NoteFaultSite(context, addr);
+        // Stack reads and fault-site hash tables serve the optional report only.
+        // Normal write tracking does not need to inspect the caller's stack.
+        if (BbStats::enabled) {
+            NoteFaultSite(context, addr);
+        }
         // bbport: the draw recording thread handles its faults inline too (vk_draw_pipe.h).
         const auto is_gpu_thread = rasterizer->IsGpuSideThread();
         if (is_gpu_thread) {

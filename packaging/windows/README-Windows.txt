@@ -166,5 +166,12 @@ original timer, add BB_RESPAWN_DELAY_FIX=0 in Advanced environment overrides.
 Diagnostic logging can affect timings; use the same mode for both loading paths.
 The report includes logs and paths, but does not copy saves, settings or game assets.
 
+Performance update: repeated launches reuse a content-verified prepared image.
+Changing the executable, bundled modules or preparation tools rebuilds it.
+Settings patches, content profiles and mods are still evaluated every launch.
+BB_PREPARE_CACHE=0 in Advanced environment overrides forces fresh preparation.
+Normal launches no longer collect diagnostic fault stacks; Save session log
+still enables the existing detailed statistics. See docs\performance-windows.md.
+
 GNU GPL v2 or later. See LICENSE, licenses\ and README.md for third-party credits.
 Not affiliated with Sony Interactive Entertainment or FromSoftware.

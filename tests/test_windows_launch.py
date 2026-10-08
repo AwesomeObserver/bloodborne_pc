@@ -94,8 +94,37 @@ class WindowsLaunchTests(unittest.TestCase):
                     self.assertEqual(runner.main(), 7)
             finally:
                 os.chdir(previous)
-            self.assertEqual([name for name, _args in calls[:5]],
-                             ['mods.py', 'prepare.py', 'link_libc.py', 'link_modules.py', 'content_profile.py'])
+            self.assertEqual([name for name, _args in calls[:4]],
+                             ['mods.py', 'prepare.py', 'link_modules.py', 'content_profile.py'])
+            self.assertIn('--no-resource-inventory', calls[1][1])
+
+    def test_cached_image_still_rebuilds_content_profile_and_settings_patches(self):
+        with tempfile.TemporaryDirectory(prefix='bb cached launch ') as directory:
+            data = Path(directory)
+            game, probe = data / 'game', data / 'bb-probe.exe'
+            game.mkdir()
+            (game / 'eboot.bin').touch()
+            probe.touch()
+            calls = []
+
+            def script(name, *args, capture=False):
+                calls.append(name)
+                return str(game) if name == 'mods.py' else None
+
+            previous = Path.cwd()
+            try:
+                with patch.dict(os.environ, dict(BB_GAME_DIR=str(game), BB_DATA_DIR=str(data),
+                        BB_PROBE=str(probe), BB_RENDER_RES='1280x720'), clear=True), \
+                     patch.object(runner, 'PORT', data), \
+                     patch.object(runner.sys, 'argv', [str(ROOT / 'run.py')]), \
+                     patch.object(runner, 'run_script', side_effect=script), \
+                     patch('prepare_cache.prepare_game', return_value=True) as prepare, \
+                     patch.object(runner, 'launch_probe', return_value=0):
+                    self.assertEqual(runner.main(), 0)
+                    prepare.assert_called_once()
+            finally:
+                os.chdir(previous)
+            self.assertEqual(calls, ['mods.py', 'content_profile.py', 'patches.py'])
 
 
 if __name__ == '__main__':

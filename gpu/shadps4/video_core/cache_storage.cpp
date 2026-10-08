@@ -15,16 +15,14 @@
 
 #include <condition_variable>
 #include <functional>
-#include <future>
+#include <exception>
 #include <mutex>
 #include <queue>
 
 namespace {
 
-std::mutex submit_mutex{};
-u32 num_requests{};
 std::condition_variable_any request_cv{};
-std::queue<std::packaged_task<void()>> req_queue{};
+std::queue<std::function<void()>> req_queue{};
 std::mutex m_request{};
 
 mz_zip_archive zip_ar{};
@@ -37,33 +35,23 @@ namespace Storage {
 void ProcessIO(const std::stop_token& stoken) {
     Common::SetCurrentThreadName("shadPS4:PipelineCacheIO");
 
-    while (!stoken.stop_requested()) {
+    for (;;) {
+        std::function<void()> request;
         {
-            std::unique_lock lk{submit_mutex};
-            Common::CondvarWait(request_cv, lk, stoken, [&] { return num_requests; });
-        }
-
-        if (stoken.stop_requested()) {
-            break;
-        }
-
-        while (num_requests) {
-            std::packaged_task<void()> request{};
-            {
-                std::scoped_lock lock{m_request};
-                if (req_queue.empty()) {
-                    continue;
-                }
-                request = std::move(req_queue.front());
-                req_queue.pop();
+            std::unique_lock lk{m_request};
+            Common::CondvarWait(request_cv, lk, stoken, [&] { return !req_queue.empty(); });
+            // Close drains accepted writes before stopping. A separate request count
+            // raced between producers/consumer and could lose queued work.
+            if (req_queue.empty()) {
+                return;
             }
-
-            if (request.valid()) {
-                request();
-                request.get_future().wait();
-            }
-
-            --num_requests;
+            request = std::move(req_queue.front());
+            req_queue.pop();
+        }
+        try {
+            request();
+        } catch (const std::exception& e) {
+            LOG_ERROR(Render, "Cache write failed: {}", e.what());
         }
     }
 }
@@ -140,7 +128,8 @@ void DataBase::Close() {
 template <typename T>
 bool WriteVector(const BlobType type, std::filesystem::path&& path_, std::vector<T>&& v) {
     {
-        auto request = std::packaged_task<void()>{[=]() {
+        // Ownership crosses the queue without copying the shader/pipeline payload.
+        std::function<void()> request = [type, path_ = std::move(path_), v = std::move(v)]() {
             auto path{path_};
             path.replace_extension(GetBlobFileExtension(type));
             if (EmulatorSettings.IsPipelineCacheArchived()) {
@@ -171,13 +160,11 @@ bool WriteVector(const BlobType type, std::filesystem::path&& path_, std::vector
                     std::filesystem::remove(temp, ec);
                 }
             }
-        }};
+        };
         std::scoped_lock lock{m_request};
         req_queue.emplace(std::move(request));
     }
 
-    std::scoped_lock lk{submit_mutex};
-    ++num_requests;
     request_cv.notify_one();
     return true;
 }

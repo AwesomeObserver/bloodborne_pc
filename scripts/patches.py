@@ -328,7 +328,10 @@ def main():
     if intel_tonemap_fix() and INTEL_TONEMAP not in names:
         names.append(INTEL_TONEMAP)
     validate_patch_requirements(names,a.game_dir)
-    segments=eboot_segments((a.out/'eboot.elf').read_bytes())
+    headers=a.out/'eboot-headers.bin'
+    # Older standalone preparation output remains usable; normal Windows
+    # launches verify the compact header file together with the linked image.
+    segments=eboot_segments((headers if headers.is_file() else a.out/'eboot.elf').read_bytes())
     writes=compile_patches(a.xml,names,a.app_version,segments)
     size=render_size(read_settings(a.settings),a.render_res) if a.render_res else None
     # The UI keeps the game's 1920x1080 coordinates even for a larger output: the port draws

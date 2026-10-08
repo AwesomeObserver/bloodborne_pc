@@ -7,7 +7,8 @@ The supplied 1.09 executable contains a **12-second minimum loading timer** enab
 by the player-death flag. This explains a concrete difference between respawn and
 Continue and closely matches the quiet interval in both captures. The Windows
 loader now removes that minimum while retaining the game's readiness checks.
-Post-fix gameplay timings still need confirmation; neither capture used this fix.
+The user confirmed that the fix works well. A timed post-fix capture is not yet
+available; neither capture below used this fix.
 
 ## Executable analysis and fix
 
@@ -149,8 +150,8 @@ the subsequent executable analysis isolated the minimum timer.
 - Reusing or unmapping GPU resources can drain recording work and perform readbacks.
   These paths exist in `Rasterizer::InvalidateMemory`, `Rasterizer::UnmapMemory` and
   `BufferCache::ReadMemory`. Their presence does not show that they cause this report.
-- The supplied executable was analyzed directly. Other game assets and a local
-  session for replay are unavailable, so before/after gameplay timing is pending.
+- The supplied executable was analyzed directly. The user confirmed the fix in
+  gameplay; other assets are unavailable for a local replay or timed comparison.
 
 ## Capture a comparison
 

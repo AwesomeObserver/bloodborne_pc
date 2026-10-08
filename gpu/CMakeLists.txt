@@ -250,6 +250,10 @@ endif()
 target_sources(bbgpu PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/bbport_version.c")
 
 # Explicit tests without game files; renderer tests execute on a Vulkan device.
+add_executable(cache-storage-test EXCLUDE_FROM_ALL ../tests/test_cache_storage.cpp ../tests/test_gpu_runtime_stubs.cpp)
+target_include_directories(cache-storage-test PRIVATE shim shadps4)
+target_compile_definitions(cache-storage-test PRIVATE NDEBUG)
+target_link_libraries(cache-storage-test PRIVATE bbgpu)
 add_executable(motion-history-test EXCLUDE_FROM_ALL ../tests/test_motion_history.cpp)
 target_compile_options(motion-history-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 target_include_directories(motion-history-test PRIVATE ..)
@@ -345,9 +349,10 @@ endif()
 add_test(NAME dlss-test COMMAND dlss-test)
 set_tests_properties(dlss-test PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
 set(BB_TEST_TARGETS motion-history-test motion-shader-test ui-composition-test settings-test overlay-test
-    scene-resolution-test taa-shader-test camera-motion-test upscaler-support-test command-dispatch-test record-data-test)
+    scene-resolution-test taa-shader-test camera-motion-test upscaler-support-test command-dispatch-test record-data-test cache-storage-test)
 if (WIN32)
     # Exercise the actual Windows HLE and SysV guest ABI, including virtual SDL input.
+    target_link_libraries(cache-storage-test PRIVATE onecore)
     add_executable(respawn-patch-test EXCLUDE_FROM_ALL ../tests/test_respawn_patch.c)
     target_include_directories(respawn-patch-test PRIVATE ../src)
     target_compile_options(respawn-patch-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
@@ -406,6 +411,9 @@ if (WIN32)
     list(APPEND BB_TEST_TARGETS runtime-test sema-test pad-test content-test input-capture-test)
     add_test(NAME vulkan-smoke-test COMMAND bb-probe --vulkan-only)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME prepare-cache-smoke-test COMMAND Python3::Interpreter
+        ${CMAKE_CURRENT_SOURCE_DIR}/../tests/prepare_cache_smoke.py)
+    set_tests_properties(prepare-cache-smoke-test PROPERTIES TIMEOUT 90)
     add_test(NAME probe-gpu-startup-test COMMAND Python3::Interpreter
         ${CMAKE_CURRENT_SOURCE_DIR}/../tests/probe_gpu_smoke.py $<TARGET_FILE:bb-probe>)
     set_tests_properties(probe-gpu-startup-test PROPERTIES TIMEOUT 90)

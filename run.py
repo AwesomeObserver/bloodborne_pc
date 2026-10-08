@@ -168,14 +168,13 @@ def main():
                            '--enabled', env.get('BB_MODS_ENABLED', '1'), capture=True).strip())
     mod_view = game if game.resolve() != original_game else None
     try:
-        run_script('prepare.py', game, '--out', out)
-        run_script('link_libc.py', game, '--out', out)
-        run_script('link_modules.py', game, '--out', out)
+        sys.path.insert(0, str(PORT / 'scripts'))
+        from prepare_cache import prepare_game
+        prepare_game(game, out, run_script)
         run_script('content_profile.py', game, '--out', out, '--sku', env.get('BB_CONTENT_SKU', 'full'))
 
         # Patches exist for game version 01.09 only (patches.py applies none to others): other
         # versions keep the game's 30 FPS timing and change resolutions live.
-        sys.path.insert(0, str(PORT / 'scripts'))
         from patches import game_app_version
         version = game_app_version(game)
         patched = version in (None, '01.09') or bool(env.get('BB_FORCE_PATCHES'))
