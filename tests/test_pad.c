@@ -37,16 +37,19 @@ static void movement_keys(bool *keys, unsigned held) {
 
 static void test_keyboard_movement(SDL_Joystick *joystick) {
     bool keys[SDL_SCANCODE_COUNT]={0};
-    /* Compare every digital direction with a virtual analog controller on the
-     * unit circle, through scePadReadState and the actual SDL axis conversion.
-     * Opposite keys cancel exactly, with no unintended -1 axis value. */
+    /* Check the delivered 8-bit vector, including quantization. A float unit
+     * vector converted through SDL can overshoot this circle in the negative
+     * quadrant. Compare against safe virtual-controller directions too. */
     for (unsigned held=0;held<16;++held) {
         movement_keys(keys,held);
         PadData mapped={.left_x=128,.left_y=128,.right_x=17,.right_y=231};
         apply_keyboard(&mapped,keys,0);
         const int x=((held&8)!=0)-((held&4)!=0);
         const int y=((held&2)!=0)-((held&1)!=0);
-        const int magnitude=x && y ? 23170 : 32767;
+        const int delivered_x=(int)mapped.left_x-128, delivered_y=(int)mapped.left_y-128;
+        assert(delivered_x*delivered_x+delivered_y*delivered_y<=128*128);
+        if (x && y) assert(delivered_x==90*x && delivered_y==90*y);
+        const int magnitude=x && y ? 23040 : 32767;
         const int raw_x=x<0 && !y ? -32768 : x*magnitude;
         const int raw_y=y<0 && !x ? -32768 : y*magnitude;
         assert(SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_LEFTX,(Sint16)raw_x));
@@ -60,18 +63,30 @@ static void test_keyboard_movement(SDL_Joystick *joystick) {
         const float vx=((int)mapped.left_x-128)/128.0f;
         const float vy=((int)mapped.left_y-128)/128.0f;
         const float strength=SDL_sqrtf(vx*vx+vy*vy);
-        assert(x || y ? strength>.99f && strength<1.01f : strength==0.f);
+        assert(x || y ? strength>.99f && strength<=1.0f : strength==0.f);
     }
     /* Keep W held while repeatedly adding/releasing/changing A and D. Every
-     * sample remains at full movement strength; no neutral or square-corner
+     * sample remains near full movement strength; no neutral or square-corner
      * sample can leak into the transition. */
     static const unsigned transitions[]={1,5,1,9,1,5,9,1};
     for (unsigned repeat=0;repeat<60;++repeat) for (unsigned n=0;n<sizeof(transitions)/sizeof(*transitions);++n) {
         movement_keys(keys,transitions[n]);
         PadData mapped={.left_x=128,.left_y=128};
         apply_keyboard(&mapped,keys,0);
-        assert(mapped.left_y==(transitions[n]==1 ? 0 : 37));
-        assert(mapped.left_x==(transitions[n]==1 ? 128 : transitions[n]==5 ? 37 : 218));
+        assert(mapped.left_y==(transitions[n]==1 ? 0 : 38));
+        assert(mapped.left_x==(transitions[n]==1 ? 128 : transitions[n]==5 ? 38 : 218));
+    }
+    /* Every possible physical axis pair mixed with each nonempty WASD state
+     * must remain bounded after integer conversion, including opposing keys. */
+    for (unsigned held=1;held<16;++held) {
+        movement_keys(keys,held);
+        for (unsigned px=0;px<256;++px) for (unsigned py=0;py<256;++py) {
+            PadData mapped={.left_x=(uint8_t)px,.left_y=(uint8_t)py,.right_x=17,.right_y=231};
+            apply_keyboard(&mapped,keys,0);
+            const int dx=(int)mapped.left_x-128, dy=(int)mapped.left_y-128;
+            assert(dx*dx+dy*dy<=128*128);
+            assert(mapped.right_x==17 && mapped.right_y==231);
+        }
     }
     memset(keys,0,sizeof(keys));
     PadData mixed={.left_x=0,.left_y=255,.right_x=17,.right_y=231};
@@ -80,11 +95,19 @@ static void test_keyboard_movement(SDL_Joystick *joystick) {
     keys[SDL_SCANCODE_W]=true;
     mixed.left_x=255; mixed.left_y=128;
     apply_keyboard(&mixed,keys,0);
-    assert(mixed.left_x==218 && mixed.left_y==37); /* W + native X share the circle */
+    assert(mixed.left_x==218 && mixed.left_y==38); /* W + native X share the circle */
     keys[SDL_SCANCODE_S]=true;
     mixed.left_x=63; mixed.left_y=211;
     apply_keyboard(&mixed,keys,0);
     assert(mixed.left_x==63 && mixed.left_y==128);
+    memset(keys,0,sizeof(keys));
+    assert(SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_LEFTX,-23170));
+    assert(SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_LEFTY,-23170));
+    SDL_UpdateJoysticks(); SDL_UpdateGamepads();
+    PadData native;
+    assert(pad_read_state(1,&native)==0 && native.left_x==37 && native.left_y==37);
+    apply_keyboard(&native,keys,0);
+    assert(native.left_x==37 && native.left_y==37); /* native axes are not re-quantized */
     assert(SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_LEFTX,0));
     assert(SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_LEFTY,0));
     SDL_UpdateJoysticks(); SDL_UpdateGamepads();
@@ -215,11 +238,11 @@ int main(void) {
     keyboard[SDL_SCANCODE_T]=keyboard[SDL_SCANCODE_H]=true;
     mapped=(PadData){.left_x=128,.left_y=128};
     apply_keyboard(&mapped,keyboard,0);
-    assert(mapped.left_x==218 && mapped.left_y==37);
+    assert(mapped.left_x==218 && mapped.left_y==38);
     keyboard[SDL_SCANCODE_T]=false;
     mapped=(PadData){.left_x=128,.left_y=128};
     apply_keyboard(&mapped,keyboard,SDL_BUTTON_LMASK);
-    assert(mapped.left_x==218 && mapped.left_y==37);
+    assert(mapped.left_x==218 && mapped.left_y==38);
     keyboard[SDL_SCANCODE_H]=false;
     mouse_buttons=SDL_BUTTON_RMASK;
     capture=1;
@@ -233,5 +256,5 @@ int main(void) {
     SDL_Quit();
     unlink(path);
     unlink(config);
-    puts("PASS: pad ABI, circular keyboard movement, W/A/D transitions, opposing keys, native/remapped input, debug camera chord, left/right clicks, SDL touch coordinates, overlay capture, controls");
+    puts("PASS: pad ABI, circular keyboard movement after quantization, symmetric diagonals, exhaustive mixed input, W/A/D transitions, opposing keys, native/remapped input, debug camera chord, left/right clicks, SDL touch coordinates, overlay capture, controls");
 }

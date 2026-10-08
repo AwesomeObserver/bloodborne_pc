@@ -268,23 +268,22 @@ static int pad_value(SDL_Gamepad *g, int input) {
 static uint8_t key_axis(uint8_t value, int negative, int positive) {
     return negative || positive ? (uint8_t)(128-(negative ? 128 : 0)+(positive ? 127 : 0)) : value;
 }
-/* Movement keys describe one stick vector, not two independently saturated
- * axes. Square corners (W+A = -1,-1) exceed full stick magnitude by sqrt(2).
- * Limit keyboard-driven movement to the same circle as an analog stick before
- * converting through the normal SDL-to-Orbis axis path. No temporal filtering.
- * Keep unbound axes from the gamepad, and leave controller-only samples intact. */
+/* Limit movement in the final 8-bit pad space, centered at 128. Normalizing
+ * through SDL's signed 16-bit conversion rounded W+A to (-91,-91), outside
+ * the radius-128 circle, but W+D to (90,-91). Quantize toward the center so
+ * mirrored keyboard diagonals stay symmetric and inside the circle.
+ * Keep unbound axes from the gamepad and controller-only samples intact. */
 static void key_movement(PadData *d, int left, int right, int up, int down) {
     if (!(left || right || up || down)) return;
-    if (left || right) d->left_x=left==right ? 128 : left ? 0 : 255;
-    if (up || down) d->left_y=up==down ? 128 : up ? 0 : 255;
-    const float x=((int)d->left_x-128)/(d->left_x<128 ? 128.0f : 127.0f);
-    const float y=((int)d->left_y-128)/(d->left_y<128 ? 128.0f : 127.0f);
-    const float length2=x*x+y*y;
-    if (length2>1.0f) {
-        const float scale=1.0f/SDL_sqrtf(length2);
-        d->left_x=axis((int16_t)SDL_lroundf(x*scale*(x<0 ? 32768.0f : 32767.0f)));
-        d->left_y=axis((int16_t)SDL_lroundf(y*scale*(y<0 ? 32768.0f : 32767.0f)));
+    int x=left || right ? ((right!=0)-(left!=0))*128 : (int)d->left_x-128;
+    int y=up || down ? ((down!=0)-(up!=0))*128 : (int)d->left_y-128;
+    const int length2=x*x+y*y;
+    if (length2>128*128) {
+        const float scale=128.0f/SDL_sqrtf((float)length2);
+        x=(int)(x*scale); y=(int)(y*scale);
     }
+    d->left_x=(uint8_t)(x>127 ? 255 : x+128);
+    d->left_y=(uint8_t)(y>127 ? 255 : y+128);
 }
 static void apply_keyboard(PadData *d, const bool *k, Uint32 mouse) {
     for (int i=IN_CROSS;i<=IN_RIGHT;++i)

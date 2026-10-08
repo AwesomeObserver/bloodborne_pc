@@ -134,7 +134,9 @@ W+A for 5 seconds, then W+D for 5 seconds without moving the mouse.
 Repeat while looking around, then disable F4 and repeat W/W+A/W+D.
 Close the game and send the mouse-camera ZIP from logs\.
 The V2 report records final pad state, camera bases and follow vectors together.
-This diagnostic update does not fix the reported F4-only movement issue.
+Keyboard diagonals now stay symmetric and within the stick range after rounding.
+The previous W+A vector exceeded that range while W+D stayed inside it.
+The input regression is fixed; confirmation of the reported gameplay stop is pending.
 
 GNU GPL v2 or later. See LICENSE, licenses\ and README.md for third-party credits.
 Not affiliated with Sony Interactive Entertainment or FromSoftware.
