@@ -33,6 +33,8 @@ int bbgpu_text_input_poll(char *out_utf8, uint64_t size);
 int bbgpu_overlay_captures_input(void);
 /* Window-thread snapshot: SDL mouse-button masks plus BB_WHEEL_* from host_input.h. */
 uint32_t bbgpu_mouse_buttons(void);
+/* Final right-stick axes (also keyboard look): native camera ownership handoff. */
+void bbgpu_camera_stick(uint8_t x, uint8_t y);
 /* Patches the loaded image before the game runs (image still writable): libGnm entry hooks. */
 void bbgpu_patch_image(unsigned char *image, uint64_t size);
 /* Number of symbols registered by the vendored libraries (diagnostics). */

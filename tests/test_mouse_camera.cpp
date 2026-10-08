@@ -25,7 +25,7 @@ constexpr unsigned char Loads[]{0xc4,0xc1,0x7a,0x10,0x85,0x40,1,0,0,
 std::array<std::uint32_t,4> StoreOffsets{0x130,0x294,0x140,0x150};
 std::array<bool,4> rotation_patched{};
 struct Report {
-    float pitch, smooth;
+    float pitch, smooth, early_yaw;
     std::uint64_t flags, r10;
     std::array<unsigned char,32> ymm;
     std::uint64_t redzone;
@@ -38,10 +38,10 @@ using Run = void (*)(void*, Report*);
 struct Caller : Xbyak::CodeGenerator {
     explicit Caller(void* function) {
         using namespace Xbyak::util;
-        push(r12); push(r13); sub(rsp, 104);
+        push(r12); push(r13); push(rdi); sub(rsp, 96);
         vmovdqu(ptr[rsp + 32], ymm15);
         vmovdqu(ptr[rsp + 80], xmm9);
-        mov(r13, rcx); mov(r12, rdx);
+        mov(r13, rcx); mov(rdi, rcx); mov(r12, rdx);
         mov(rax, reinterpret_cast<uintptr_t>(Pattern.data()));
         vmovdqu(ymm15, ptr[rax]);
         mov(eax, 0x3f600000); vmovd(xmm2, eax); // 0.875 for the original camera store
@@ -64,9 +64,10 @@ struct Caller : Xbyak::CodeGenerator {
         vmovdqu(ptr[r12 + offsetof(Report, ymm)], ymm15);
         vmovss(ptr[r12 + offsetof(Report, pitch)], xmm0);
         vmovss(ptr[r12 + offsetof(Report, smooth)], xmm1);
+        vmovss(ptr[r12 + offsetof(Report, early_yaw)], xmm3);
         vmovdqu(ymm15, ptr[rsp + 32]);
         vmovdqu(xmm9, ptr[rsp + 80]);
-        add(rsp, 104); pop(r13); pop(r12); ret();
+        add(rsp, 96); pop(rdi); pop(r13); pop(r12); ret();
         ready();
     }
 };
@@ -126,6 +127,16 @@ int main(int argc, char** argv) {
         assert(!std::memcmp(image + Sites[1], bytes.data(), 9));
     }
     std::memcpy(image + Sites[1], saved.data(), 9);
+    // Reject unsafe relocated prologues and an unverified this-pointer register.
+    std::array<unsigned char,27> entry_saved{};
+    std::memcpy(entry_saved.data(), image + CameraFixture::Begin, entry_saved.size());
+    image[CameraFixture::Begin] = 0xe8;
+    assert(!BbMouse::Install(image, ImageSize));
+    assert(!std::memcmp(image + Sites[0], Loads, sizeof(Loads)));
+    std::memcpy(image + CameraFixture::Begin, entry_saved.data(), entry_saved.size());
+    image[CameraFixture::Begin + 8] = 0xf5; // mov r13,rsi instead of rdi
+    assert(!BbMouse::Install(image, ImageSize));
+    std::memcpy(image + CameraFixture::Begin, entry_saved.data(), entry_saved.size());
     const auto extra_site = all_stores[4].offset;
     std::memcpy(saved.data(), image + extra_site, 9);
     std::memset(image + extra_site, 0x90, 9); // missing response store must reject too
@@ -142,6 +153,8 @@ int main(int argc, char** argv) {
     assert(!std::memcmp(image + CameraFixture::Begin - 32, outside.data(), 9));
     assert(!std::memcmp(image + CameraFixture::Begin + 0x1200, unrelated.data(), 9));
     std::array<std::array<unsigned char,18>,5> installed{};
+    std::array<unsigned char,6> entry_installed{};
+    std::memcpy(entry_installed.data(), image + CameraFixture::Begin, entry_installed.size());
     for (unsigned i = 0; i < Sites.size(); ++i)
         std::memcpy(installed[i].data(), image + Sites[i], i ? 9 : 18);
     std::vector<std::array<unsigned char,9>> all_installed(all_stores.size());
@@ -150,7 +163,7 @@ int main(int argc, char** argv) {
     DWORD old;
     assert(VirtualProtect(image, ImageSize, PAGE_EXECUTE_READ, &old));
     FlushInstructionCache(GetCurrentProcess(), image, ImageSize);
-    Caller main_caller(image + Sites[0]);
+    Caller main_caller(image + CameraFixture::Begin);
     std::array<std::unique_ptr<Caller>, 4> store_callers;
     std::array<Run, 4> stores;
     for (unsigned i = 0; i < stores.size(); ++i) {
@@ -177,6 +190,7 @@ int main(int argc, char** argv) {
         store(camera.data(), &report); Check(report);
         assert(Get(camera, site.field) == (patched ? .25f : .875f));
         BbMouse::SetActive(true);
+        BbMouse::Motion(1,1); BbMouse::Apply(camera.data()); // claim camera, not merely cursor capture
         Put(camera, site.field, .25f);
         for (unsigned frame = 0; frame < 120; ++frame) store(camera.data(), &report);
         Check(report);
@@ -205,6 +219,7 @@ int main(int argc, char** argv) {
     Check(report);
     assert(std::abs(report.pitch - .25f) < 1e-6f && report.smooth == report.pitch);
     assert(std::abs(Get(camera, 0x144) - .4f) < 1e-6f);
+    assert(report.early_yaw == Get(camera, 0x144)); // both axes updated before their first reads
     assert(Get(camera, 0x26c) == report.pitch && Get(camera, 0x270) == Get(camera, 0x144));
     for (unsigned i = 0; i < stores.size(); ++i) {
         Put(camera, StoreOffsets[i], .25f);
@@ -226,6 +241,47 @@ int main(int argc, char** argv) {
     Put(camera, 0x154, 0.f);
     run(camera.data(), &report);
     assert(Get(camera, 0x144) == .4f); // no buffered jump after unlocking
+
+    // F4 capture alone never disables either stick axis. A deliberate stick
+    // takes both axes back, even while mouse packets arrive; releasing it keeps
+    // native ownership until the next nonzero mouse delta, without a stale jump.
+    BbMouse::SetActive(false); BbMouse::SetActive(true);
+    Put(camera, 0x140, .1f); Put(camera, 0x144, .1f);
+    for (unsigned i = 0; i < stores.size(); ++i) {
+        Put(camera, StoreOffsets[i], .25f);
+        stores[i](camera.data(), &report);
+        assert(Get(camera, StoreOffsets[i]) == (rotation_patched[i] ? .25f : .875f));
+    }
+    for (const auto axes : {std::array<std::uint8_t,2>{128,0}, {255,128}, {0,255}}) {
+        BbMouse::Motion(90,90);
+        BbMouse::Stick(axes[0], axes[1]);
+        BbMouse::Motion(900,900); // held stick has priority, discard mouse motion
+        run(camera.data(), &report); Check(report);
+        for (unsigned i = 0; i < stores.size(); ++i) {
+            Put(camera, StoreOffsets[i], .25f);
+            stores[i](camera.data(), &report);
+            assert(Get(camera, StoreOffsets[i]) == (rotation_patched[i] ? .25f : .875f));
+        }
+        BbMouse::Stick(128,128);
+        Put(camera, 0x140, .1f); Put(camera, 0x144, .1f);
+        run(camera.data(), &report);
+        assert(Get(camera, 0x140) == .1f && Get(camera, 0x144) == .1f);
+        BbMouse::Motion(90,90); run(camera.data(), &report);
+        assert(std::abs(report.pitch - .2f) < 1e-6f);
+        assert(report.early_yaw == Get(camera, 0x144));
+        assert(std::abs(report.pitch - report.early_yaw) < 1e-6f);
+    }
+
+    // Model the stale chase targets/correction left by the previous hook.
+    // Entry must synchronize them even on idle updates, before either axis is read.
+    for (int frame = 0; frame < 120; ++frame) {
+        for (auto field : {0x148,0x14c,0x150,0x26c,0x270}) Put(camera, field, -.75f);
+        Put(camera, 0x130, .25f); Put(camera, 0x294, .125f);
+        run(camera.data(), &report); Check(report);
+        assert(std::abs(report.pitch - .2f) < 1e-6f && report.early_yaw == report.pitch);
+        for (auto field : {0x148,0x14c,0x150,0x26c,0x270}) assert(Get(camera, field) == report.pitch);
+        assert(Get(camera, 0x130) == 0.f && Get(camera, 0x294) == 0.f);
+    }
 
     for (int fps : {30, 60, 120, 240}) {
         Put(camera, 0x140, 0.f); Put(camera, 0x144, 0.f);
@@ -266,7 +322,7 @@ int main(int argc, char** argv) {
     run(camera.data(), &report);
     assert(Get(camera, 0x144) == yaw); // focus/menu/toggle discards old motion
 
-    // The separate binocular object is updated without touching normal-camera angles.
+    // Binocular target angles and the follow camera stay synchronized, also at rest.
     std::array<unsigned char,0x90> p1{}, p2{};
     std::array<unsigned char,0x280> binocular{};
     auto* p2_ptr = p2.data(); auto* binocular_ptr = binocular.data(); auto* p1_ptr = p1.data();
@@ -281,8 +337,30 @@ int main(int argc, char** argv) {
     BbMouse::Motion(90,45); run(camera.data(), &report);
     assert(std::abs(Get(binocular, 0x148) - .025f) < 1e-6f);
     assert(std::abs(Get(binocular, 0x14c) - .05f) < 1e-6f);
-    assert(Get(camera, 0x144) == yaw);
+    assert(Get(camera, 0x140) == Get(binocular, 0x148));
+    assert(Get(camera, 0x144) == Get(binocular, 0x14c));
+    for (int frame = 0; frame < 120; ++frame) run(camera.data(), &report);
+    assert(Get(camera, 0x140) == Get(binocular, 0x148));
+    assert(Get(camera, 0x144) == Get(binocular, 0x14c));
     std::memcpy(p2.data() + 0x84, &mono_off, 4);
+
+    // A producer on the actual input thread boundary must never split a
+    // diagonal packet into an X-only and then Y-only camera update.
+    BbMouse::SetActive(false); BbMouse::SetActive(true);
+    std::atomic<bool> packets_done{false};
+    std::thread producer([&] {
+        for (int n = 0; n < 10000; ++n) BbMouse::Motion(.125f,.125f);
+        packets_done = true;
+    });
+    do {
+        Put(camera, 0x140, 0.f); Put(camera, 0x144, 0.f);
+        run(camera.data(), &report); Check(report);
+        assert(report.pitch == report.early_yaw);
+    } while (!packets_done);
+    producer.join();
+    Put(camera, 0x140, 0.f); Put(camera, 0x144, 0.f);
+    run(camera.data(), &report);
+    assert(report.pitch == report.early_yaw);
 
     // Repeated toggles never touch instructions that a guest thread is executing.
     std::atomic<bool> stop{false};
@@ -294,11 +372,13 @@ int main(int argc, char** argv) {
     stop = true; guest.join();
     for (unsigned i = 0; i < Sites.size(); ++i)
         assert(!std::memcmp(installed[i].data(), image + Sites[i], i ? 9 : 18));
+    assert(!std::memcmp(entry_installed.data(), image + CameraFixture::Begin, entry_installed.size()));
     for (unsigned i = 0; i < all_stores.size(); ++i)
         assert(!std::memcmp(all_installed[i].data(), image + all_stores[i].offset, 9));
 
     const auto bench = [&](bool capture, bool moving) {
         BbMouse::SetActive(capture);
+        if (capture) { BbMouse::Motion(1,0); run(camera.data(), &report); }
         const auto start = std::chrono::steady_clock::now();
         for (unsigned n = 0; n < 100000; ++n) {
             if (moving) BbMouse::Motion(1,0);
@@ -311,6 +391,7 @@ int main(int argc, char** argv) {
                 off,idle,moving);
     BbMouse::SetActive(false);
     VirtualFree(image,0,MEM_RELEASE);
-    std::puts("PASS: executable camera hooks, full AVX/flags preservation, signature rollback, "
-              "lock-on, frame-independent sensitivity, invalid input and concurrent toggles");
+    std::puts("PASS: update-entry camera hooks, equal-axis/early-yaw response, idle target/correction reset, "
+              "native stick handoff, full AVX/flags preservation, signature rollback, lock-on, "
+              "frame-independent sensitivity, invalid input and concurrent toggles");
 }

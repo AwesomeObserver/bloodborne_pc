@@ -123,6 +123,11 @@ int main() {
             BbMouse::Apply(camera.data());
         };
         const auto id = SDL_GetWindowID(window.GetSDLWindow());
+        reset();
+        motion(IsolateMotion::TestDevice, id, 90, 90);
+        assert(Get(camera.data(), 0x140) == Get(camera.data(), 0x144));
+        assert(Get(camera.data(), 0x148) == Get(camera.data(), 0x140));
+        assert(Get(camera.data(), 0x14c) == Get(camera.data(), 0x144));
         for (const int packet : {1, 30, 900}) {
             reset();
             for (int n = 0; n < 900; n += packet)

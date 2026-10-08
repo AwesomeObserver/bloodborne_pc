@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <vector>
 #ifdef _WIN32
 #include <windows.h>
@@ -20,9 +21,17 @@
 
 namespace BbMouse {
 namespace {
-alignas(64) std::atomic<std::int64_t> pending_x{0}, pending_y{0};
+// Consume a mouse packet's two axes together. Separate exchanges could split a
+// diagonal packet across updates when the window and camera threads overlapped.
+alignas(64) std::atomic<std::uint64_t> pending_motion{0};
+static_assert(decltype(pending_motion)::is_always_lock_free);
 alignas(64) std::atomic<std::uint8_t> active{0};
+// Capture and camera ownership are different: F4 may capture the cursor while
+// the controller owns the camera. Keep the native stick path until new mouse input.
+std::atomic<std::uint8_t> mouse_owns{0};
+std::atomic<bool> stick_moving{false};
 static_assert(sizeof(active) == 1 && decltype(active)::is_always_lock_free);
+static_assert(sizeof(stick_moving) == 1 && decltype(stick_moving)::is_always_lock_free);
 std::atomic<bool> available{false};
 std::atomic<const char*> problem{"Camera hook has not been checked yet"};
 uintptr_t monocular_base = 0;
@@ -33,18 +42,25 @@ constexpr std::array<unsigned char, 18> MainCode{
     0xc4, 0xc1, 0x7a, 0x10, 0x85, 0x40, 0x01, 0x00, 0x00,
     0xc4, 0xc1, 0x7a, 0x10, 0x8d, 0x50, 0x01, 0x00, 0x00};
 // Supported 1.09 camera update routine. The four fixed stores above only
-// disable movement auto-rotation; the other angle stores also apply stick
-// response and interpolation. All of them must yield to direct mouse input.
+// disable movement auto-rotation; the other stores also apply controller
+// response and interpolation. They yield only while the mouse owns the camera.
 constexpr std::size_t FunctionBegin = 0x143ac60, FunctionEnd = 0x143fad0;
 constexpr unsigned ExpectedStoreSignatures = 29;
 constexpr std::size_t TrampolineSize = 16384;
 
-void Add(std::atomic<std::int64_t>& target, float delta) {
-    const auto d = std::int64_t(std::clamp(double(delta) * Fixed,
-                                         -double(MotionLimit), double(MotionLimit)));
-    auto old = target.load(std::memory_order_relaxed);
-    while (!target.compare_exchange_weak(old, std::clamp(old + d, -MotionLimit, MotionLimit),
-                                         std::memory_order_relaxed)) {}
+void Add(float dx, float dy) {
+    const auto counts = [](float value) {
+        return std::int64_t(std::clamp(double(value) * Fixed,
+                                     -double(MotionLimit), double(MotionLimit)));
+    };
+    const auto x = counts(dx), y = counts(dy);
+    auto old = pending_motion.load(std::memory_order_relaxed);
+    for (;;) {
+        const auto a = std::clamp(std::int64_t(std::int32_t(old)) + x, -MotionLimit, MotionLimit);
+        const auto b = std::clamp(std::int64_t(std::int32_t(old >> 32)) + y, -MotionLimit, MotionLimit);
+        const auto next = std::uint64_t(std::uint32_t(a)) | std::uint64_t(std::uint32_t(b)) << 32;
+        if (pending_motion.compare_exchange_weak(old, next, std::memory_order_relaxed)) return;
+    }
 }
 template<class T> T Read(const unsigned char* p, std::size_t offset) {
     T value;
@@ -62,20 +78,28 @@ template<class T> bool Guarded(uintptr_t address, T& value) {
     return address && ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(address),
                                         &value, sizeof(value), &copied) && copied == sizeof(value);
 }
-// Binocular mode uses a separate object; inspect it only when motion is pending.
-bool Monocular(float dx, float dy) {
+// Binocular mode uses a separate target-angle object. Keep the normal camera's
+// angle state synchronized with it, including idle updates and mode transitions.
+bool Monocular(float dx, float dy, float& pitch, float& yaw) {
     uintptr_t p1 = 0, p2 = 0, p3 = 0;
     int enabled = 0;
     if (!Guarded(monocular_base, p1) || !p1 || !Guarded(p1 + 0x68, p2) || !p2 ||
         !Guarded(p2 + 0x84, enabled) || !enabled || !Guarded(p2 + 0x68, p3) || !p3) return false;
     struct Angles { float pitch, yaw; } angles{};
     if (!Guarded(p3 + 0x148, angles) || !std::isfinite(angles.pitch) ||
-        !std::isfinite(angles.yaw)) return true;
+        !std::isfinite(angles.yaw)) {
+        pitch = yaw = std::numeric_limits<float>::quiet_NaN();
+        return true;
+    }
     angles.pitch = std::clamp(angles.pitch + dy * 0.5f, -1.94f, 1.71f);
     angles.yaw = Yaw(angles.yaw + dx * 0.5f);
-    SIZE_T written;
-    WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(p3 + 0x148),
-                       &angles, sizeof(angles), &written);
+    SIZE_T written = 0;
+    if (!WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(p3 + 0x148),
+                           &angles, sizeof(angles), &written) || written != sizeof(angles)) {
+        pitch = yaw = std::numeric_limits<float>::quiet_NaN();
+        return true;
+    }
+    pitch = angles.pitch; yaw = angles.yaw;
     return true;
 }
 
@@ -96,7 +120,51 @@ bool StoreInstruction(const unsigned char* p, bool angles_only = false) {
     // The 1.09 camera also stores its rotation state at +130 and +294.
     // Checking only the angle fields we write in Apply rejects these stores.
     return offset == 0x130 || offset == 0x140 || offset == 0x144 || offset == 0x150 ||
-           offset == 0x294 || (!angles_only && (offset == 0x26c || offset == 0x270));
+           offset == 0x294 || (!angles_only && (offset == 0x148 || offset == 0x14c ||
+                                               offset == 0x26c || offset == 0x270));
+}
+
+// Relocate a complete, position-independent prologue, never an arbitrary five
+// bytes. Also verify that this routine takes its R13 camera from SysV's RDI.
+std::size_t EntrySpan(const unsigned char* image) {
+    ZydisDecoder decoder;
+    ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64);
+    std::size_t copied = 0;
+    bool camera_argument = false;
+    for (std::size_t at = 0; at < 128;) {
+        ZydisDecodedInstruction inst{};
+        ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT]{};
+        if (!ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, image + FunctionBegin + at,
+                128 - at, &inst, operands))) return 0;
+        if (copied < 5) {
+            bool safe = inst.mnemonic == ZYDIS_MNEMONIC_NOP ||
+                        inst.mnemonic == ZYDIS_MNEMONIC_ENDBR64;
+            if (inst.mnemonic == ZYDIS_MNEMONIC_PUSH)
+                safe = operands[0].type == ZYDIS_OPERAND_TYPE_REGISTER;
+            if (inst.mnemonic == ZYDIS_MNEMONIC_MOV)
+                safe = operands[0].type == ZYDIS_OPERAND_TYPE_REGISTER &&
+                       operands[1].type == ZYDIS_OPERAND_TYPE_REGISTER;
+            if (inst.mnemonic == ZYDIS_MNEMONIC_SUB)
+                safe = operands[0].type == ZYDIS_OPERAND_TYPE_REGISTER &&
+                       operands[0].reg.value == ZYDIS_REGISTER_RSP &&
+                       operands[1].type == ZYDIS_OPERAND_TYPE_IMMEDIATE;
+            if (!safe) return 0;
+            copied += inst.length;
+        }
+        if (inst.mnemonic == ZYDIS_MNEMONIC_MOV &&
+            operands[0].type == ZYDIS_OPERAND_TYPE_REGISTER &&
+            operands[0].reg.value == ZYDIS_REGISTER_R13 &&
+            operands[1].type == ZYDIS_OPERAND_TYPE_REGISTER &&
+            operands[1].reg.value == ZYDIS_REGISTER_RDI)
+            camera_argument = true;
+        if (camera_argument && copied >= 5) return copied;
+        if (inst.meta.category == ZYDIS_CATEGORY_CALL ||
+            inst.meta.category == ZYDIS_CATEGORY_COND_BR ||
+            inst.meta.category == ZYDIS_CATEGORY_UNCOND_BR ||
+            inst.meta.category == ZYDIS_CATEGORY_RET) return 0;
+        at += inst.length;
+    }
+    return 0;
 }
 
 bool RotationPatch(const unsigned char* p) {
@@ -145,7 +213,8 @@ void* AllocateNear(unsigned char* image, std::uint64_t size) {
 // All user extended state, including YMM upper halves and MXCSR, survives the
 // native callback. The guest's SysV red zone and flags survive too. Never patch
 // a running instruction: F4 changes only the atomic gate in the permanent hooks.
-void Bridge(Xbyak::CodeGenerator& c, unsigned state_size, std::uint64_t mask) {
+void Bridge(Xbyak::CodeGenerator& c, unsigned state_size, std::uint64_t mask,
+            const Xbyak::Reg64& camera) {
     using namespace Xbyak::util;
     const std::array<Xbyak::Reg64, 15> regs{rax, rcx, rdx, rbx, rbp, rsi, rdi,
                                            r8, r9, r10, r11, r12, r13, r14, r15};
@@ -166,7 +235,7 @@ void Bridge(Xbyak::CodeGenerator& c, unsigned state_size, std::uint64_t mask) {
     c.mov(edx, std::uint32_t(mask >> 32));
     const unsigned char save[]{0x48, 0x0f, 0xae, 0x64, 0x24, 0x40}; // xsave64 [rsp+64]
     c.db(save, sizeof(save));
-    c.mov(rcx, r13);
+    c.mov(rcx, camera);
     c.mov(rax, reinterpret_cast<uintptr_t>(&Apply));
     c.call(rax); // Win64 shadow space is below the XSAVE area
     c.mov(eax, std::uint32_t(mask));
@@ -187,39 +256,60 @@ void SetActive(bool value) {
     value &= Available() && BbSettings::Get().mouse_camera.load();
     if (active.load(std::memory_order_relaxed) == value) return;
     if (active.exchange(value, std::memory_order_acq_rel) != value) {
-        pending_x.exchange(0, std::memory_order_relaxed);
-        pending_y.exchange(0, std::memory_order_relaxed);
+        mouse_owns.store(0, std::memory_order_release);
+        pending_motion.exchange(0, std::memory_order_relaxed);
     }
 }
 void Motion(float dx, float dy) {
-    if (!active.load(std::memory_order_acquire) || !std::isfinite(dx) || !std::isfinite(dy)) return;
-    Add(pending_x, dx);
-    Add(pending_y, dy);
+    if (!active.load(std::memory_order_acquire) || stick_moving.load(std::memory_order_acquire) ||
+        !std::isfinite(dx) || !std::isfinite(dy) || (dx == 0.f && dy == 0.f)) return;
+    Add(dx, dy);
+    mouse_owns.store(1, std::memory_order_release);
+}
+void Stick(std::uint8_t x, std::uint8_t y) {
+    // Ownership threshold only; the actual axes reaching the game are untouched.
+    // Ignore resting-stick noise, including the common 127 rather than 128 centre.
+    const bool moving = std::abs(int(x) - 128) > 8 || std::abs(int(y) - 128) > 8;
+    stick_moving.store(moving, std::memory_order_release);
+    if (moving) {
+        mouse_owns.store(0, std::memory_order_release);
+        pending_motion.exchange(0, std::memory_order_relaxed);
+    }
 }
 void Apply(void* pointer) {
     if (!active.load(std::memory_order_acquire)) return;
-    const auto x = pending_x.exchange(0, std::memory_order_relaxed);
-    const auto y = pending_y.exchange(0, std::memory_order_relaxed);
-    if ((!x && !y) || !pointer) return;
+    const auto motion = pending_motion.exchange(0, std::memory_order_relaxed);
+    const auto x = std::int32_t(motion), y = std::int32_t(motion >> 32);
+    if (!pointer || !mouse_owns.load(std::memory_order_acquire) ||
+        stick_moving.load(std::memory_order_acquire)) return;
     auto* camera = static_cast<unsigned char*>(pointer);
-    if (Read<float>(camera, 0x154) == 1.f) return; // lock-on keeps the game's own camera
+    if (Read<float>(camera, 0x154) == 1.f) {
+        mouse_owns.store(0, std::memory_order_release);
+        return; // lock-on keeps the game's own camera
+    }
     const auto& s = BbSettings::Get();
     const float setting = s.mouse_sensitivity;
     const float scale = (std::isfinite(setting) ? std::clamp(setting, 1.f, 400.f) : 100.f) /
                         (100.f * 900.f * float(Fixed));
     const float dx = float(x) * scale, dy = float(y) * scale * (s.mouse_invert_y ? -1.f : 1.f);
-#ifdef _WIN32
-    if (Monocular(dx, dy)) return;
-#endif
     const float pitch = Read<float>(camera, 0x140), yaw = Read<float>(camera, 0x144);
     if (!std::isfinite(pitch) || !std::isfinite(yaw)) return;
     float low = Read<float>(camera, 0x1f0), high = Read<float>(camera, 0x1ec);
     if (!std::isfinite(low) || !std::isfinite(high) || low >= high || low < -3.f || high > 3.f) {
         low = -1.94f; high = 1.71f;
     }
-    const float p = std::clamp(pitch + dy, low, high), a = Yaw(yaw + dx);
-    Write(camera, 0x140, p); Write(camera, 0x150, p); Write(camera, 0x26c, p);
-    Write(camera, 0x144, a); Write(camera, 0x270, a);
+    float p = std::clamp(pitch + dy, low, high), a = Yaw(yaw + dx);
+#ifdef _WIN32
+    Monocular(dx, dy, p, a);
+    if (!std::isfinite(p) || !std::isfinite(a)) return;
+#endif
+    // Seed the whole angle state before either axis is evaluated. Updating only
+    // current angles halfway through the routine left stale targets/corrections
+    // available to its pitch/yaw chase paths, even after input had stopped.
+    Write(camera, 0x140, p); Write(camera, 0x148, p);
+    Write(camera, 0x150, p); Write(camera, 0x26c, p);
+    Write(camera, 0x144, a); Write(camera, 0x14c, a); Write(camera, 0x270, a);
+    Write(camera, 0x130, 0.f); Write(camera, 0x294, 0.f);
 }
 
 bool Install(unsigned char* image, std::uint64_t size) {
@@ -243,8 +333,13 @@ bool Install(unsigned char* image, std::uint64_t size) {
             return fail("Camera store signature differs (game version or conflicting patch)");
         }
     }
+    const auto entry_size = EntrySpan(image);
+    if (!entry_size) {
+        LogSignature(image, FunctionBegin, 32);
+        return fail("Camera update prologue differs (game version or conflicting patch)");
+    }
     struct Hook { std::size_t offset, size; };
-    std::vector<Hook> hooks{{Sites[0], MainCode.size()}};
+    std::vector<Hook> hooks{{FunctionBegin, entry_size}};
     unsigned signatures = unsigned(std::count(rotation_patched.begin(), rotation_patched.end(), true));
     // The exact VEX encoding/count is a second signature for this routine. Each
     // match is independently decoded before copying it to a trampoline. Only
@@ -290,23 +385,20 @@ bool Install(unsigned char* image, std::uint64_t size) {
             code.mov(rax, reinterpret_cast<uintptr_t>(&active));
             code.cmp(byte[rax], 0);
             code.je(original, Xbyak::CodeGenerator::T_NEAR);
+            code.mov(rax, reinterpret_cast<uintptr_t>(&mouse_owns));
+            code.cmp(byte[rax], 0);
+            code.je(original, Xbyak::CodeGenerator::T_NEAR);
+            code.mov(rax, reinterpret_cast<uintptr_t>(&stick_moving));
+            code.cmp(byte[rax], 0);
+            code.jne(original, Xbyak::CodeGenerator::T_NEAR);
             if (i) {
                 code.cmp(dword[r13 + 0x154], 0x3f800000);
                 code.je(original, Xbyak::CodeGenerator::T_NEAR);
-            } else {
-                Xbyak::Label input;
-                code.mov(rax, reinterpret_cast<uintptr_t>(&pending_x));
-                code.cmp(qword[rax], 0);
-                code.jne(input);
-                code.mov(rax, reinterpret_cast<uintptr_t>(&pending_y));
-                code.cmp(qword[rax], 0);
-                code.je(original, Xbyak::CodeGenerator::T_NEAR);
-                code.L(input);
             }
             code.pop(rax); code.popfq();
             code.lea(rsp, ptr[rsp + 128]);
             if (!i) {
-                Bridge(code, b, mask);
+                Bridge(code, b, mask, rdi);
                 code.db(image + hook.offset, hook.size);
             }
             code.jmp(done, Xbyak::CodeGenerator::T_NEAR);
@@ -341,7 +433,7 @@ bool Install(unsigned char* image, std::uint64_t size) {
     monocular_base = reinterpret_cast<uintptr_t>(image) + 0x553e8d0;
     problem = nullptr;
     available.store(true, std::memory_order_release);
-    std::printf("Mouse camera: verified startup hooks ready (F4); %zu response stores bypassed, %u existing rotation-patch sites preserved; no polling thread\n",
+    std::printf("Mouse camera: verified update-entry hook ready (F4); %zu angle/target stores gated, %u existing rotation-patch sites preserved; native controller handoff\n",
         hooks.size() - 1, unsigned(std::count(rotation_patched.begin(), rotation_patched.end(), true)));
     return true;
 #else

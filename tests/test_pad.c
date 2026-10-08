@@ -6,8 +6,10 @@
 
 static int capture;
 static Uint32 mouse_buttons;
+static uint8_t camera_x, camera_y;
 int bbgpu_overlay_captures_input(void) { return capture; }
 uint32_t bbgpu_mouse_buttons(void) { return mouse_buttons; }
+void bbgpu_camera_stick(uint8_t x, uint8_t y) { camera_x=x; camera_y=y; }
 uintptr_t runtime_lookup(const RuntimeExport *table, size_t count, const char *name) {
     (void)table; (void)count; (void)name;
     return 0;
@@ -76,10 +78,24 @@ int main(void) {
     SDL_UpdateGamepads();
     assert(pad_read_state(1,&data)==0);
     assert(gamepad && data.touch_count==2 && (data.buttons & BTN_TOUCHPAD));
+    // The final native axes also drive mouse/controller ownership, including
+    // vertical-only movement and neutralization while the port menu is open.
+    assert(SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_RIGHTY,-32768));
+    SDL_UpdateJoysticks(); SDL_UpdateGamepads();
+    assert(pad_read_state(1,&data)==0 && data.right_y==0);
+    assert(camera_x==data.right_x && camera_y==0);
+    assert(SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_RIGHTX,32767));
+    SDL_UpdateJoysticks(); SDL_UpdateGamepads();
+    assert(pad_read_state(1,&data)==0 && camera_x==255 && camera_y==0);
+    assert(SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_RIGHTX,0));
+    assert(SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_RIGHTY,0));
+    SDL_UpdateJoysticks(); SDL_UpdateGamepads();
+    assert(pad_read_state(1,&data)==0 && camera_x==128 && camera_y==128);
     assert(data.touches[0].x==1439 && data.touches[0].y==471 && data.touches[0].id==2);
     assert(data.touches[1].x==480 && data.touches[1].y==942 && data.touches[1].id==3);
     capture=1;
     assert(pad_read_state(1,&data)==0 && data.touch_count==0 && data.buttons==0);
+    assert(camera_x==128 && camera_y==128);
     capture=0;
     assert(SDL_SetJoystickVirtualTouchpad(joystick,0,0,false,0,0,0));
     assert(SDL_SetJoystickVirtualTouchpad(joystick,0,1,false,0,0,0));

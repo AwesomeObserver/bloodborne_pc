@@ -28,7 +28,7 @@ HIGHLIGHTS
   current DLLs may substitute; E/F are deprecated. Render scale is independent.
 - Optional DLSS FG x2 or FSR 3.1 FG x2, selected separately from upscaling.
   FSR FG can also run with DLSS or native TAA.
-- Raw mouse camera: direct angles, linear sensitivity, invert Y, F4 capture.
+- Raw mouse camera: direct angles, equal-axis gain, invert Y and controller handoff.
 - Press-to-bind keyboard, mouse and controller; four bindings per action.
 - Unlocked FPS, configurable frame cap, sharpening and individual effect toggles.
 - In-game settings, mod ordering, XML patches, camera tweaks and optional cheats.
@@ -63,6 +63,8 @@ Close the capture window to cancel. Remaps apply at the next game launch.
 The launcher and in-game menu expose mouse sensitivity and invert Y. Opening the
 port menu, name entry or switching windows releases capture. Lock-on uses the
 game's camera. Conflicting camera patches disable raw camera with a reason.
+Moving the right stick restores both native camera axes with F4 still on. After
+releasing the stick, move the mouse to take control again; queued motion is discarded.
 
 In the settings menu, use the mouse and wheel; Ctrl+click a slider to enter an
 exact value. Settings save when the menu closes. Effects, model detail and

@@ -11,6 +11,9 @@ const char* Problem();
 // Window thread: raw SDL relative motion and capture transitions. No sampler thread.
 void SetActive(bool active);
 void Motion(float dx, float dy);
-// Runs only on the guest camera thread, before the original camera loads.
+// Final pad state, including keyboard look bindings. A deliberate stick movement
+// returns camera ownership to the game; mouse motion takes it back after release.
+void Stick(std::uint8_t x, std::uint8_t y);
+// Runs on the guest camera thread, before its update prologue/angle calculations.
 void Apply(void* camera);
 } // namespace BbMouse

@@ -460,7 +460,10 @@ static void touch_ids(PadData *d) {
 }
 static void sample(PadData *d) {
     sample_host(d);
-    if (bbgpu_overlay_captures_input()) { hold_after_capture=1; touch_ids(d); return; }
+    if (bbgpu_overlay_captures_input()) {
+        bbgpu_camera_stick(128,128);
+        hold_after_capture=1; touch_ids(d); return;
+    }
     record_sample(d);
     read_inject();
     replay_sample(d);
@@ -481,6 +484,7 @@ static void sample(PadData *d) {
         else hold_after_capture=0;
     }
     touch_ids(d);
+    bbgpu_camera_stick(d->right_x,d->right_y);
 }
 
 static ABI int32_t pad_init(void) { pthread_mutex_lock(&lock); initialized=1; pthread_mutex_unlock(&lock); return 0; }
