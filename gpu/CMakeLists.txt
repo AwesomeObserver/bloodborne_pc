@@ -304,6 +304,12 @@ target_compile_definitions(command-dispatch-test PRIVATE NDEBUG)
 target_compile_options(command-dispatch-test PRIVATE -fPIC)
 target_link_libraries(command-dispatch-test PRIVATE bbgpu)
 
+add_executable(record-data-test EXCLUDE_FROM_ALL ../tests/test_record_data.cpp
+    ../tests/test_gpu_runtime_stubs.cpp)
+target_include_directories(record-data-test PRIVATE shim shadps4 third_party/gcn/include)
+target_compile_definitions(record-data-test PRIVATE NDEBUG)
+target_link_libraries(record-data-test PRIVATE bbgpu)
+
 # bbport: FSR 4 benchmark outside the game (tools/fsr4_bench.cpp): ninja -C out/gpu fsr4-bench.
 add_executable(upscaler-support-test EXCLUDE_FROM_ALL ../tests/test_upscaler_support.cpp
     shim/bbport_settings.cpp)
@@ -339,7 +345,7 @@ endif()
 add_test(NAME dlss-test COMMAND dlss-test)
 set_tests_properties(dlss-test PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
 set(BB_TEST_TARGETS motion-history-test motion-shader-test ui-composition-test settings-test overlay-test
-    scene-resolution-test taa-shader-test camera-motion-test upscaler-support-test command-dispatch-test)
+    scene-resolution-test taa-shader-test camera-motion-test upscaler-support-test command-dispatch-test record-data-test)
 if (WIN32)
     # Exercise the actual Windows HLE and SysV guest ABI, including virtual SDL input.
     add_executable(mouse-camera-test EXCLUDE_FROM_ALL ../tests/test_mouse_camera.cpp
@@ -389,7 +395,7 @@ if (WIN32)
     add_executable(content-test EXCLUDE_FROM_ALL ../tests/test_content.c ../src/runtime_content.c)
     target_include_directories(content-test PRIVATE ../src)
     target_compile_options(content-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
-    foreach(test IN ITEMS motion-shader-test scene-resolution-test taa-shader-test camera-motion-test command-dispatch-test overlay-test)
+    foreach(test IN ITEMS motion-shader-test scene-resolution-test taa-shader-test camera-motion-test command-dispatch-test record-data-test overlay-test)
         target_sources(${test} PRIVATE ../src/compat_win.c)
         target_link_libraries(${test} PRIVATE bcrypt onecore ws2_32 -pthread)
     endforeach()
@@ -402,6 +408,14 @@ if (WIN32)
     add_test(NAME probe-crash-dump-test COMMAND Python3::Interpreter
         ${CMAKE_CURRENT_SOURCE_DIR}/../tests/probe_crash_dump.py $<TARGET_FILE:bb-probe>)
     set_tests_properties(probe-crash-dump-test PROPERTIES TIMEOUT 45)
+    add_executable(gpu-assert-crash-test EXCLUDE_FROM_ALL ../tests/test_gpu_assert_crash.cpp
+        ../src/crash_win.c)
+    target_include_directories(gpu-assert-crash-test PRIVATE shim shadps4)
+    target_link_libraries(gpu-assert-crash-test PRIVATE bbgpu)
+    target_compile_definitions(gpu-assert-crash-test PRIVATE NDEBUG)
+    add_test(NAME gpu-assert-crash-dump-test COMMAND Python3::Interpreter
+        ${CMAKE_CURRENT_SOURCE_DIR}/../tests/gpu_assert_crash_dump.py $<TARGET_FILE:gpu-assert-crash-test>)
+    set_tests_properties(gpu-assert-crash-dump-test PROPERTIES TIMEOUT 120)
 endif()
 foreach(test IN LISTS BB_TEST_TARGETS)
     add_test(NAME ${test} COMMAND ${test})
@@ -415,9 +429,16 @@ set_tests_properties(command-dispatch-test PROPERTIES ENVIRONMENT
 add_test(NAME command-dispatch-sync-test COMMAND command-dispatch-test)
 set_tests_properties(command-dispatch-sync-test PROPERTIES TIMEOUT 120 ENVIRONMENT
     "BB_VK_RECORD_THREAD=1;BB_VK_RECORD_THREADS=3;BB_VK_SEGMENT_KB=1;BB_ASYNC_SUBMIT=0")
+set_tests_properties(record-data-test PROPERTIES ENVIRONMENT
+    "BB_VK_RECORD_THREAD=1;BB_VK_RECORD_THREADS=3;BB_VK_SEGMENT_KB=1;BB_ASYNC_SUBMIT=1")
+foreach(mode IN ITEMS sync direct)
+    add_test(NAME record-data-${mode}-test COMMAND record-data-test)
+    set_tests_properties(record-data-${mode}-test PROPERTIES TIMEOUT 120 ENVIRONMENT
+        "BB_VK_RECORD_THREAD=$<IF:$<STREQUAL:${mode},direct>,0,1>;BB_VK_RECORD_THREADS=3;BB_VK_SEGMENT_KB=1;BB_ASYNC_SUBMIT=0")
+endforeach()
 add_custom_target(bb-tests DEPENDS ${BB_TEST_TARGETS} dlss-test frame-generation-test)
 if (WIN32)
-    add_dependencies(bb-tests bb-probe)
+    add_dependencies(bb-tests bb-probe gpu-assert-crash-test)
 endif()
 
 add_executable(fsr4-bench EXCLUDE_FROM_ALL tools/fsr4_bench.cpp

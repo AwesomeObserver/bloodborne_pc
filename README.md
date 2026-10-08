@@ -118,6 +118,7 @@ port's data folder. **Advanced → Save session log** enables additional session
 - [Windows 0.4 migration and validation](docs/windows-upstream-0.4.md)
 - [Windows crash analysis](docs/crash-analysis-windows-v1.5.md)
 - [October 8 gameplay crash investigation](docs/crash-analysis-2026-10-08.md)
+- [Vulkan command-data crash and missing dump fix](docs/crash-analysis-2026-10-09.md)
 
 ## Credits & license
 

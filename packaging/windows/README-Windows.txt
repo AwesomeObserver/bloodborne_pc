@@ -107,6 +107,9 @@ Crash dumps stay on your computer. BB_CRASH_DUMP=0 disables them;
 BB_CRASH_DIR selects an existing output directory.
 Guest crash context adds up to 2 MiB of nearby code and object pages to the
 normal minidump. Collection runs only after a crash.
+Fatal GPU assertions also write a minidump before stopping with exit code 23.
+Their dump uses assertion marker 0xE0424201 and records the failing thread and
+reason. This marker identifies a deliberate assertion, not a CPU access violation.
 
 HELP AND DOCUMENTATION
 

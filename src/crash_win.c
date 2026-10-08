@@ -1,4 +1,4 @@
-/* Preserve the original exception, guest callers and nearby objects on Windows.
+/* Preserve exceptions/fatal assertions, guest callers and nearby objects on Windows.
  * DbgHelp runs on a dedicated thread, with a bounded wait on the faulting thread. */
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -20,6 +20,8 @@ static EXCEPTION_RECORD record;
 static CONTEXT context;
 static EXCEPTION_POINTERS pointers = {&record, &context};
 static DWORD fault_thread, dump_error;
+static volatile LONG dump_claimed;
+static char fatal_reason[256];
 static wchar_t dump_directory[1024];
 static char dump_path_utf8[4096];
 static uintptr_t guest_base;
@@ -160,12 +162,12 @@ static DWORD WINAPI dump_worker(void *unused) {
     } else {
         MINIDUMP_EXCEPTION_INFORMATION info = {fault_thread, &pointers, FALSE};
         select_memory();
-        char description[512];
+        char description[768];
         int length = snprintf(description, sizeof(description),
             "BBPORT_GUEST_CONTEXT_V1\nimage_base=0x%llx\nimage_size=0x%llx\n"
-            "page_size=%zu\nextra_pages=%u\nextra_limit=%u\ncaller_frames=%u\n",
+            "page_size=%zu\nextra_pages=%u\nextra_limit=%u\ncaller_frames=%u\nreason=%s\n",
             (unsigned long long)guest_base, (unsigned long long)guest_size,
-            system_page, page_count, EXTRA_BYTES, frame_count);
+            system_page, page_count, EXTRA_BYTES, frame_count, fatal_reason);
         MINIDUMP_USER_STREAM stream = {CommentStreamA, (ULONG)length+1, description};
         MINIDUMP_USER_STREAM_INFORMATION streams = {1, &stream};
         MINIDUMP_CALLBACK_INFORMATION callback = {dump_callback, NULL};
@@ -215,7 +217,7 @@ void crash_win_init(void) {
     write_dump = (WriteDump)GetProcAddress(dbghelp, "MiniDumpWriteDump");
     if (!write_dump) return;
     requested = CreateEventW(NULL, FALSE, FALSE, NULL);
-    completed = CreateEventW(NULL, FALSE, FALSE, NULL);
+    completed = CreateEventW(NULL, TRUE, FALSE, NULL);
     if (!requested || !completed) {
         if (requested) CloseHandle(requested);
         if (completed) CloseHandle(completed);
@@ -232,12 +234,17 @@ void crash_win_init(void) {
     CloseHandle(thread);
 }
 
-void crash_win_dump(EXCEPTION_POINTERS *exception) {
+static void submit_dump(EXCEPTION_POINTERS *exception, const char *reason) {
     if (!requested || !completed) return;
-    record = *exception->ExceptionRecord;
-    context = *exception->ContextRecord;
-    fault_thread = GetCurrentThreadId();
-    SetEvent(requested);
+    /* First failure owns the snapshot. Other fatal threads wait for the same
+     * completed file instead of overwriting context or terminating mid-write. */
+    if (InterlockedCompareExchange(&dump_claimed, 1, 0) == 0) {
+        record = *exception->ExceptionRecord;
+        context = *exception->ContextRecord;
+        snprintf(fatal_reason, sizeof(fatal_reason), "%s", reason);
+        fault_thread = GetCurrentThreadId();
+        SetEvent(requested);
+    }
     if (WaitForSingleObject(completed, 10000) != WAIT_OBJECT_0) {
         fprintf(stderr, "Crash dump: timed out after 10 seconds\n");
     } else if (dump_error) {
@@ -245,5 +252,21 @@ void crash_win_dump(EXCEPTION_POINTERS *exception) {
     } else {
         fprintf(stderr, "Crash dump: %s\n", dump_path_utf8);
     }
+}
+
+void crash_win_dump(EXCEPTION_POINTERS *exception) {
+    submit_dump(exception, "Windows exception");
+}
+
+__attribute__((noinline)) void crash_win_dump_fatal(const char *reason) {
+    if (!requested || !completed) return;
+    CONTEXT current;
+    RtlCaptureContext(&current);
+    EXCEPTION_RECORD fatal = {0};
+    fatal.ExceptionCode = BB_CRASH_ASSERT_EXCEPTION;
+    fatal.ExceptionFlags = EXCEPTION_NONCONTINUABLE;
+    fatal.ExceptionAddress = (void *)(uintptr_t)current.Rip;
+    EXCEPTION_POINTERS exception = {&fatal, &current};
+    submit_dump(&exception, reason ? reason : "Fatal stop");
 }
 #endif
