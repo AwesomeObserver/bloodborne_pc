@@ -31,6 +31,7 @@
 #include "core/libraries/gnmdriver/gnmdriver.h"
 #include "core/platform.h"
 #include "video_core/amdgpu/liverpool.h"
+#include "video_core/amdgpu/command_dispatch.h"
 #include "bbport_write_log.h"
 #include "bbport_free_check.h"
 #include "video_core/amdgpu/pm4_cmds.h"
@@ -98,25 +99,23 @@ Liverpool::~Liverpool() {
 }
 
 void Liverpool::ProcessCommands() {
-    // Process incoming commands with high priority
-    while (num_commands) {
-        // bbport: commands touch the caches and record into the scheduler (readbacks:
-        // DownloadMemory copies and Finish()es), so the draw recording thread must be idle.
-        // Drained per command: draining only when the first check saw one let a command that
-        // arrived between the two checks run beside the recording thread — two threads in the
-        // scheduler's chunks (null chunk crashes in HandOver/SmallGuestCopy, lost chunks, hangs).
-        if (rasterizer) {
-            rasterizer->DrainDrawPipe(Vulkan::DrawPipe::ReasonCommands);
-        }
-        Common::UniqueFunction<void> callback{};
-        {
+    // Readbacks can record barriers/copies and submit work. Never run them alongside stage B.
+    // Keep the ownership transfer in the tested dispatcher: windows-v1.5 checked for work
+    // separately before draining, then checked again and could run a newly arrived command.
+    DispatchHostCommands(
+        [this] { return num_commands.load(std::memory_order_acquire) != 0; },
+        [this] {
             std::scoped_lock lk{submit_mutex};
-            callback = std::move(command_queue.front());
+            auto callback = std::move(command_queue.front());
             command_queue.pop();
             --num_commands;
-        }
-        callback();
-    }
+            return callback;
+        },
+        [this] {
+            if (rasterizer) {
+                rasterizer->DrainDrawPipe(Vulkan::DrawPipe::ReasonCommands);
+            }
+        });
 }
 
 void Liverpool::Process(std::stop_token stoken) {

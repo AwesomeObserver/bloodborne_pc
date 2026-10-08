@@ -36,6 +36,9 @@ Data
 - Settings: bbport.ini next to Bloodborne.exe; launcher options in %APPDATA%\bbport-launcher.
 - Generated files (prepared game image, patches): out\.
 - Advanced -> Save session log: console log and frame CSV in logs\.
+- Native crashes also save a Windows minidump in logs\crashes\ (under the selected data folder).
+  Include the .dmp and the session log in a crash report. BB_CRASH_DUMP=0 disables minidumps;
+  BB_CRASH_DIR selects an existing directory. Dumps stay on your computer.
 
 Cheats
 - The "Cheats" page has cheats (never die, enemies do not see or hear you, Rally never fades,

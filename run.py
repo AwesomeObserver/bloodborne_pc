@@ -134,6 +134,13 @@ def main():
     data = Path(env.get('BB_DATA_DIR', PORT))
     out = data / 'out'
     out.mkdir(parents=True, exist_ok=True)
+    # Keep native driver crash dumps with this portable installation's logs.
+    crash_dir = Path(env.setdefault('BB_CRASH_DIR', str(data / 'logs' / 'crashes')))
+    try:
+        crash_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        print(f'Crash dumps unavailable: {error}')
+        env['BB_CRASH_DUMP'] = '0'
     env.setdefault('BB_CONFIG', str(data / 'bbport.ini'))
     config = env['BB_CONFIG']
     if not env.get('BB_FSR411_DIR') and not (PORT / 'fsr4_411').is_dir() and (data / 'fsr4_411').is_dir():

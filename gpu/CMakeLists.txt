@@ -210,7 +210,7 @@ if (WIN32)
     add_library(atrac9 STATIC ${BB_ATRAC9})
     target_compile_options(atrac9 PRIVATE -w)
     set_target_properties(atrac9 PROPERTIES C_STANDARD 99 INTERPROCEDURAL_OPTIMIZATION OFF)
-    add_executable(bb-probe ../src/probe.c ${BB_RUNTIME} ../src/compat_win.c ../src/vulkan_smoke.c
+    add_executable(bb-probe ../src/probe.c ${BB_RUNTIME} ../src/compat_win.c ../src/crash_win.c ../src/vulkan_smoke.c
         ../packaging/windows/bb-probe.rc)
     set_target_properties(bb-probe PROPERTIES C_STANDARD 11 C_EXTENSIONS OFF)
     target_compile_options(bb-probe PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Werror>)
@@ -266,6 +266,13 @@ target_compile_options(camera-motion-test PRIVATE -fPIC)
 target_link_libraries(camera-motion-test PRIVATE bbgpu)
 add_dependencies(camera-motion-test host_shaders)
 
+add_executable(command-dispatch-test EXCLUDE_FROM_ALL ../tests/test_command_dispatch.cpp
+    ../tests/test_gpu_runtime_stubs.cpp)
+target_include_directories(command-dispatch-test PRIVATE shim shadps4 third_party/gcn/include)
+target_compile_definitions(command-dispatch-test PRIVATE NDEBUG)
+target_compile_options(command-dispatch-test PRIVATE -fPIC)
+target_link_libraries(command-dispatch-test PRIVATE bbgpu)
+
 # bbport: FSR 4 benchmark outside the game (tools/fsr4_bench.cpp): ninja -C out/gpu fsr4-bench.
 add_executable(upscaler-support-test EXCLUDE_FROM_ALL ../tests/test_upscaler_support.cpp
     shim/bbport_settings.cpp)
@@ -274,7 +281,7 @@ target_compile_options(upscaler-support-test PRIVATE -UNDEBUG)
 
 enable_testing()
 set(BB_TEST_TARGETS motion-history-test motion-shader-test ui-composition-test settings-test
-    scene-resolution-test taa-shader-test camera-motion-test upscaler-support-test)
+    scene-resolution-test taa-shader-test camera-motion-test upscaler-support-test command-dispatch-test)
 if (WIN32)
     # Exercise the actual Windows HLE and SysV guest ABI, including virtual SDL input.
     foreach(test IN ITEMS runtime sema)
@@ -294,7 +301,7 @@ if (WIN32)
     add_executable(content-test EXCLUDE_FROM_ALL ../tests/test_content.c ../src/runtime_content.c)
     target_include_directories(content-test PRIVATE ../src)
     target_compile_options(content-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
-    foreach(test IN ITEMS motion-shader-test scene-resolution-test taa-shader-test camera-motion-test)
+    foreach(test IN ITEMS motion-shader-test scene-resolution-test taa-shader-test camera-motion-test command-dispatch-test)
         target_sources(${test} PRIVATE ../src/compat_win.c)
         target_link_libraries(${test} PRIVATE bcrypt onecore ws2_32 -pthread)
     endforeach()
@@ -304,11 +311,19 @@ if (WIN32)
     add_test(NAME probe-gpu-startup-test COMMAND Python3::Interpreter
         ${CMAKE_CURRENT_SOURCE_DIR}/../tests/probe_gpu_smoke.py $<TARGET_FILE:bb-probe>)
     set_tests_properties(probe-gpu-startup-test PROPERTIES TIMEOUT 90)
+    add_test(NAME probe-crash-dump-test COMMAND Python3::Interpreter
+        ${CMAKE_CURRENT_SOURCE_DIR}/../tests/probe_crash_dump.py $<TARGET_FILE:bb-probe>)
+    set_tests_properties(probe-crash-dump-test PROPERTIES TIMEOUT 45)
 endif()
 foreach(test IN LISTS BB_TEST_TARGETS)
     add_test(NAME ${test} COMMAND ${test})
     set_tests_properties(${test} PROPERTIES TIMEOUT 120)
 endforeach()
+set_tests_properties(command-dispatch-test PROPERTIES ENVIRONMENT
+    "BB_VK_RECORD_THREAD=1;BB_VK_RECORD_THREADS=3;BB_VK_SEGMENT_KB=1;BB_ASYNC_SUBMIT=1")
+add_test(NAME command-dispatch-sync-test COMMAND command-dispatch-test)
+set_tests_properties(command-dispatch-sync-test PROPERTIES TIMEOUT 120 ENVIRONMENT
+    "BB_VK_RECORD_THREAD=1;BB_VK_RECORD_THREADS=3;BB_VK_SEGMENT_KB=1;BB_ASYNC_SUBMIT=0")
 add_custom_target(bb-tests DEPENDS ${BB_TEST_TARGETS})
 if (WIN32)
     add_dependencies(bb-tests bb-probe)
