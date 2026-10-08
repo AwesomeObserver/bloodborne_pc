@@ -34,6 +34,10 @@ Starting
   "Apply and restart game". Resolution and quality also require a restart when live
   resolution changes are disabled. The reactive mask applies to FSR, not DLSS or TAA.
 - Controls: select a controller and remap keys/buttons. Backspace opens the right touchpad.
+- Mouse camera: F4 toggles direct camera control. Controls in the launcher and the game menu
+  offer sensitivity and invert Y. Menus, name entry and Alt+Tab release the cursor. Lock-on
+  retains the game's camera. Requires the matching 1.09 camera code; conflicting patches
+  disable this feature with a reason rather than changing unknown instructions.
 
 Data
 - Saves and shader caches: user\ next to Bloodborne.exe (the launcher can pick another folder).

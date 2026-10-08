@@ -13,6 +13,7 @@
 
 #include <SDL3/SDL.h>
 #include "bbport_settings.h"
+#include "bbport_mouse.h"
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -62,6 +63,13 @@ float base_scale = 1.0f;
 // Present rate for the FPS counter.
 std::chrono::steady_clock::time_point last_present{};
 float frame_ms_avg = 0.0f;
+std::atomic<std::int64_t> mouse_toast_until{0};
+bool mouse_toast_enabled = false;
+
+std::int64_t NowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 
 float PixelDensity(SDL_WindowID id);
 
@@ -616,6 +624,20 @@ void Menu() {
     }
 
     ImGui::SeparatorText(BbSettings::MenuText("Other", "Прочее"));
+    ImGui::BeginDisabled(!BbMouse::Available());
+    Checkbox(BbSettings::MenuText("Mouse camera (F4)", "Камера мышью (F4)"), s.mouse_camera);
+    Slider(BbSettings::MenuText("Mouse sensitivity (%)", "Чувствительность мыши (%)"),
+           s.mouse_sensitivity, 1.f, 400.f);
+    Checkbox(BbSettings::MenuText("Invert mouse Y", "Инверсия мыши по Y"), s.mouse_invert_y);
+    ImGui::EndDisabled();
+    if (const auto* reason = BbMouse::Problem()) ImGui::TextWrapped("%s", reason);
+    Hint(BbSettings::MenuText(
+        "Raw mouse motion controls the camera directly, without stick acceleration. "
+        "F4 toggles capture. Opening this menu or switching windows releases the cursor. "
+        "Sensitivity is independent of the frame cap. Lock-on keeps the game's camera.",
+        "Мышь управляет камерой напрямую, без ускорения стика. F4 переключает захват. "
+        "Меню и переключение окон освобождают курсор. Чувствительность не зависит от "
+        "ограничителя FPS. При захвате цели работает камера игры."));
     Checkbox(BbSettings::MenuText("FPS counter in corner", "Счётчик FPS в углу"), s.show_fps);
 
     ImGui::Spacing();
@@ -863,7 +885,8 @@ bool HandleEvent(const SDL_Event& event) {
 }
 
 bool Visible() {
-    return initialized && (menu_open || text_entry_active || BbSettings::Get().show_fps);
+    return initialized && (menu_open || text_entry_active || BbSettings::Get().show_fps ||
+                           mouse_toast_until.load(std::memory_order_relaxed) > NowMs());
 }
 
 bool MenuOpen() { return menu_open; }
@@ -877,6 +900,12 @@ void SetTextEntry(bool active, const std::string& prompt, const std::string& tex
     text_entry_active = active;
     text_entry_prompt = prompt;
     text_entry_text = text;
+}
+
+void ShowMouseCamera(bool enabled) {
+    std::scoped_lock lock{imgui_mutex};
+    mouse_toast_enabled = enabled;
+    mouse_toast_until = NowMs() + 2500;
 }
 
 void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
@@ -913,6 +942,22 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
     }
     if (text_entry_active) {
         TextEntryBox();
+    }
+    if (mouse_toast_until.load(std::memory_order_relaxed) > NowMs()) {
+        const auto* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkSize.x * .5f,
+                                      viewport->WorkSize.y - 24.f * base_scale),
+                                ImGuiCond_Always, ImVec2(.5f, 1.f));
+        ImGui::SetNextWindowBgAlpha(.85f);
+        ImGui::Begin("##mouse_camera_toast", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                     ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
+                     ImGuiWindowFlags_NoFocusOnAppearing);
+        if (const auto* reason = BbMouse::Problem()) ImGui::TextWrapped("%s", reason);
+        else ImGui::TextUnformatted(mouse_toast_enabled
+            ? BbSettings::MenuText("Mouse camera enabled (F4)", "Камера мышью включена (F4)")
+            : BbSettings::MenuText("Mouse camera disabled (F4)", "Камера мышью выключена (F4)"));
+        ImGui::End();
     }
     ImGui::Render();
 

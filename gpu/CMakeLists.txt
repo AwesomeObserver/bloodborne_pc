@@ -323,6 +323,12 @@ set(BB_TEST_TARGETS motion-history-test motion-shader-test ui-composition-test s
     scene-resolution-test taa-shader-test camera-motion-test upscaler-support-test command-dispatch-test)
 if (WIN32)
     # Exercise the actual Windows HLE and SysV guest ABI, including virtual SDL input.
+    add_executable(mouse-camera-test EXCLUDE_FROM_ALL ../tests/test_mouse_camera.cpp
+        ../tests/test_gpu_runtime_stubs.cpp ../src/compat_win.c)
+    target_include_directories(mouse-camera-test PRIVATE shim shadps4 third_party/xbyak)
+    target_compile_definitions(mouse-camera-test PRIVATE NDEBUG)
+    target_link_libraries(mouse-camera-test PRIVATE bbgpu bcrypt onecore ws2_32 -pthread)
+    list(APPEND BB_TEST_TARGETS mouse-camera-test)
     foreach(test IN ITEMS runtime sema)
         add_executable(${test}-test EXCLUDE_FROM_ALL ../tests/test_${test}.c
             ${BB_RUNTIME} ../src/compat_win.c ../packaging/windows/bb-probe.rc)

@@ -39,5 +39,7 @@ bool MenuOpen();
 /// Window thread: the game's text dialog (sceImeDialog). Shown as a box on screen until
 /// `active` is false; typing goes to the window (sdl_window), the box only displays it.
 void SetTextEntry(bool active, const std::string& prompt, const std::string& text);
+/// Window thread: F4 notification, including why the camera is unavailable.
+void ShowMouseCamera(bool enabled);
 
 } // namespace BbOverlay

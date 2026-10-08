@@ -57,6 +57,9 @@ Nothing else to install: everything the game needs is in the zip.
 4. Press **PLAY**.
 
 In the game, **Insert** (or **L3+R3** on a controller) opens the settings menu.
+**F4** toggles direct mouse camera control. Enable it and adjust sensitivity/invert Y on
+**Controls** in the launcher or in the game menu. Opening a menu or switching windows
+releases capture; lock-on retains the game's camera. See [mouse camera](docs/mouse-camera-windows.md).
 Use the mouse and wheel to edit and scroll through the menu; Ctrl+click a slider to enter
 an exact value. Settings are saved when the menu closes. Effects, model detail and motion
 vector patches require **Apply and restart game**. With live resolution changes disabled,

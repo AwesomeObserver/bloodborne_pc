@@ -13,6 +13,7 @@ so a packaged port needs no Python installation.
 """
 import ctypes
 import json
+import math
 import os
 from pathlib import Path
 import queue
@@ -163,10 +164,12 @@ TWEAKS = [
     ('tweak_ragdoll', ('Dark Souls-style ragdoll physics (corpses fly further)',
                        'Физика тел как в Dark Souls (тела отлетают дальше)'), False),
 ]
-INI_FLAGS = {'sharpen', 'object_motion', 'show_fps', *(k for k, _t, _o in EFFECTS + EXTRAS + CHEATS + TWEAKS)}
+INI_FLAGS = {'sharpen', 'object_motion', 'show_fps', 'mouse_camera', 'mouse_invert_y',
+             *(k for k, _t, _o in EFFECTS + EXTRAS + CHEATS + TWEAKS)}
 INI_DEFAULTS = {'upscaler': 'fsr4', 'preset': '1', 'sharpen': '1', 'sharpness': '0.50',
                 'object_motion': '1', 'show_fps': '1', 'output_res': '1920x1080', 'model_lod': '0',
                 'live_resolution': 'auto', 'frame_generation': 'off', 'dlss_preset': 'auto',
+                'mouse_camera': '0', 'mouse_invert_y': '0', 'mouse_sensitivity': '100.00',
                 **{key: '1' if on else '0' for key, _t, on in EFFECTS + EXTRAS + CHEATS + TWEAKS}}
 APP_DEFAULTS = {'ui_language': '', 'game_dir': str(PORT_DIR.parent / 'CUSA03173'), 'user_dir': '',
                 'mods_dir': '', 'mods_enabled': True, 'patches_dir': '', 'language': '1',
@@ -269,6 +272,11 @@ def load_ini():
     model_names.update({str(ord(preset) - ord('A') + 1): preset
                         for preset, _label in DLSS_PRESETS if len(preset) == 1})
     values['dlss_preset'] = model_names.get(values['dlss_preset'].strip().upper(), 'auto')
+    try:
+        sensitivity = float(values['mouse_sensitivity'])
+        values['mouse_sensitivity'] = f'{min(400., max(1., sensitivity)):.2f}' if math.isfinite(sensitivity) else '100.00'
+    except ValueError:
+        values['mouse_sensitivity'] = '100.00'
     return values, lines
 
 
@@ -483,7 +491,7 @@ class Launcher:
                 value = self.ini.get(key, INI_DEFAULTS[key])
                 if key in INI_FLAGS:
                     v = tk.BooleanVar(value=value == '1')
-                elif key == 'sharpness':
+                elif key in ('sharpness', 'mouse_sensitivity'):
                     v = tk.DoubleVar(value=float(value or 0.5))
                 else:
                     v = tk.StringVar(value=value)
@@ -877,7 +885,17 @@ class Launcher:
         f = self.scrolled_page('controls', _('Controls', 'Управление'),
                                _('Choose a controller and remap keyboard keys or controller buttons.',
                                  'Выберите контроллер и назначьте клавиши и кнопки.'))
-        self.section(f, _('Controller', 'Контроллер'), top=4)
+        self.section(f, _('Mouse camera', 'Камера мышью'), top=4)
+        self.check(f, 'mouse_camera', 'ini', _('Enable direct mouse camera (F4)', 'Камера мышью (F4)'),
+                   _('Raw relative input, no stick acceleration. F4 toggles capture in the game. '
+                     'Menus and Alt+Tab release the cursor; lock-on uses the game camera.',
+                     'Прямой ввод без ускорения стика. F4 переключает захват в игре. '
+                     'Меню и Alt+Tab освобождают курсор; при захвате цели работает камера игры.'))
+        self.row(f, _('Sensitivity (%)', 'Чувствительность (%)'),
+                 self.ttk.Spinbox(f, from_=1, to=400, increment=1,
+                                 textvariable=self.var('mouse_sensitivity', 'ini'), width=12))
+        self.check(f, 'mouse_invert_y', 'ini', _('Invert mouse Y', 'Инверсия мыши по Y'))
+        self.section(f, _('Controller', 'Контроллер'))
         holder = self.ttk.Frame(f)
         self.gamepad_box = self.ttk.Combobox(holder, state='readonly', width=38)
         self.gamepad_box.pack(side='left')
@@ -899,7 +917,7 @@ class Launcher:
 
     def reset_controls(self):
         for key, value in INI_DEFAULTS.items():
-            if key.startswith(('key.', 'pad.')):
+            if key.startswith(('key.', 'pad.', 'mouse_')):
                 self.var(key, 'ini').set(value)
 
     def refresh_gamepads(self):
@@ -1204,7 +1222,7 @@ class Launcher:
                 value = APP_DEFAULTS.get(key, INI_DEFAULTS.get(key))
             if var.store == 'ini':
                 self.ini[key] = ('1' if value else '0') if key in INI_FLAGS else \
-                    f'{float(value):.2f}' if key == 'sharpness' else str(value)
+                    f'{float(value):.2f}' if key in ('sharpness', 'mouse_sensitivity') else str(value)
             else:
                 self.app[key] = value
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)

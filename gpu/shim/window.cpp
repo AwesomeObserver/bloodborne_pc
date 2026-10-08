@@ -6,6 +6,8 @@
 #include "common/logging/log.h"
 #include "sdl_window.h"
 #include "bbport_overlay.h"
+#include "bbport_mouse.h"
+#include "bbport_settings.h"
 
 namespace Frontend {
 
@@ -59,6 +61,8 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
 }
 
 WindowSDL::~WindowSDL() {
+    BbMouse::SetActive(false);
+    SDL_SetWindowRelativeMouseMode(window, false);
     SDL_DestroyWindow(window);
 }
 
@@ -84,6 +88,7 @@ void WindowSDL::UpdateTextTitle() {
 }
 
 bool WindowSDL::PollEvents() {
+    UpdateMouseCapture();
     {
         std::scoped_lock lock{text_mutex};
         if (text_requested) { // SDL text input must be toggled from the window thread
@@ -96,6 +101,7 @@ bool WindowSDL::PollEvents() {
     if (!text_active) {
         BbOverlay::UpdateTextInput(window);
     }
+    UpdateMouseCapture(); // a requested game text dialog releases capture before draining input
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
         if (event.type == SDL_EVENT_MOUSE_MOTION) {
@@ -129,7 +135,22 @@ bool WindowSDL::PollEvents() {
             continue;
         }
         if (BbOverlay::HandleEvent(event)) {
+            UpdateMouseCapture();
             continue;
+        }
+        if (!text_active && event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F4 &&
+            !event.key.repeat && !(event.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI))) {
+            if (BbMouse::Available()) {
+                auto& settings = BbSettings::Get();
+                settings.mouse_camera = !settings.mouse_camera;
+                UpdateMouseCapture();
+                BbSettings::Save();
+            }
+            BbOverlay::ShowMouseCamera(BbSettings::Get().mouse_camera);
+        }
+        if (event.type == SDL_EVENT_MOUSE_MOTION && mouse_captured && !text_active &&
+            !BbOverlay::CapturesInput()) {
+            BbMouse::Motion(event.motion.xrel, event.motion.yrel);
         }
         switch (event.type) {
         case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
@@ -148,16 +169,28 @@ bool WindowSDL::PollEvents() {
             break;
         }
     }
+    UpdateMouseCapture();
     UpdateCursor();
     return is_open;
+}
+
+void WindowSDL::UpdateMouseCapture() {
+    const bool desired = BbMouse::Available() && BbSettings::Get().mouse_camera && !text_active &&
+                         !BbOverlay::CapturesInput() &&
+                         (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS);
+    if (desired != mouse_captured) {
+        BbMouse::SetActive(false); // flush stale deltas before SDL changes capture
+        if (SDL_SetWindowRelativeMouseMode(window, desired)) mouse_captured = desired;
+    }
+    BbMouse::SetActive(desired && mouse_captured);
 }
 
 // Issue #3: the OS cursor over the game. Hidden in fullscreen, and in a window after 3 s without
 // moving the mouse; always shown while the settings menu is open.
 void WindowSDL::UpdateCursor() {
     const bool fullscreen = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0;
-    const bool hide = !BbOverlay::MenuOpen() &&
-                      (fullscreen || SDL_GetTicks() - last_mouse_motion_ms > 3000);
+    const bool hide = mouse_captured || (!BbOverlay::CapturesInput() &&
+                      (fullscreen || SDL_GetTicks() - last_mouse_motion_ms > 3000));
     if (hide != cursor_hidden) {
         cursor_hidden = hide;
         hide ? SDL_HideCursor() : SDL_ShowCursor();

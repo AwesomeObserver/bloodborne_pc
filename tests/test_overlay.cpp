@@ -197,6 +197,20 @@ int main() {
     Frame();
     assert(std::abs(amount.load() - 0.75f) < 0.001f);
 
+#ifdef _WIN32
+    // A verified synthetic image enables the actual camera controls in this menu test.
+    auto* camera_image = static_cast<unsigned char*>(VirtualAlloc(nullptr, 0x5540000,
+        MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    assert(camera_image);
+    const unsigned char camera_loads[]{0xc4,0xc1,0x7a,0x10,0x85,0x40,1,0,0,
+                                       0xc4,0xc1,0x7a,0x10,0x8d,0x50,1,0,0};
+    std::memcpy(camera_image + 0x143ceaa, camera_loads, sizeof(camera_loads));
+    const unsigned char camera_store[]{0xc4,0xc1,0x7a,0x11,0x95,0x40,1,0,0};
+    for (auto offset : {0x143c6e8, 0x143c984, 0x143dde6, 0x143c870})
+        std::memcpy(camera_image + offset, camera_store, sizeof(camera_store));
+    assert(BbMouse::Install(camera_image, 0x5540000));
+#endif
+
     auto& s = BbSettings::Get();
     s.menu_language = BbSettings::MenuLanguage::English;
     s.dlss_supported = s.fsr4_supported = s.fsr411_supported = true;
@@ -250,6 +264,14 @@ int main() {
     Select("Upscaler", "FSR 3.1");
     assert(!Find("Sharpening (RCAS)").disabled);
     assert(!Find("Enable mask").disabled);
+#ifdef _WIN32
+    ClickItem("Mouse camera (F4)");
+    assert(s.mouse_camera);
+    ClickItem("Mouse sensitivity (%)");
+    assert(s.mouse_sensitivity != 100.f);
+    ClickItem("Invert mouse Y");
+    assert(s.mouse_invert_y);
+#endif
 
     // Escape dismisses an open dropdown before closing the whole menu.
     ClickItem("Upscaler");
@@ -330,6 +352,7 @@ int main() {
         event.motion.x = at.x / density;
         event.motion.y = at.y / density;
         assert(SDL_PushEvent(&event));
+        assert(SDL_WaitEventTimeout(nullptr, 8)); // waiting must not consume the mouse event
         assert(window.PollEvents());
         Frame();
         event = {};
@@ -346,6 +369,21 @@ int main() {
         assert(window.PollEvents());
         Frame();
         assert(checked != old);
+
+        Key(SDLK_INSERT, true); // F4 is available during gameplay, not menu value entry
+        event = {};
+        event.type = SDL_EVENT_KEY_DOWN;
+        event.key.windowID = id;
+        event.key.key = SDLK_F4;
+        assert(SDL_PushEvent(&event)); assert(window.PollEvents());
+        assert(!s.mouse_camera);
+        event.key.mod = SDL_KMOD_ALT;
+        assert(SDL_PushEvent(&event)); assert(window.PollEvents());
+        assert(!s.mouse_camera); // Alt+F4 must not toggle the camera
+        event.key.mod = SDL_KMOD_NONE;
+        assert(SDL_PushEvent(&event)); assert(window.PollEvents());
+        assert(s.mouse_camera);
+        Key(SDLK_INSERT, true);
     }
     unsetenv("BB_HIDDEN_WINDOW");
 #endif
@@ -357,6 +395,11 @@ int main() {
     saved << file.rdbuf();
     assert(saved.str().find("dlss_preset=K\n") != std::string::npos);
     assert(saved.str().find("output_res=2560x1440\n") != std::string::npos);
+#ifdef _WIN32
+    assert(saved.str().find("mouse_camera=1\n") != std::string::npos);
+    assert(saved.str().find("mouse_invert_y=1\n") != std::string::npos);
+    VirtualFree(camera_image, 0, MEM_RELEASE);
+#endif
     file.close();
     ImGui::DestroyContext();
     BbOverlay::initialized = false;

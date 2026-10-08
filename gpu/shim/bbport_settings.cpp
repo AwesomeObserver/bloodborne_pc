@@ -6,6 +6,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <cmath>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -81,6 +83,15 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.debug_view = std::clamp(i, 0, DebugViewCount - 1);
     } else if (key == "show_fps") {
         v.show_fps = i != 0;
+    } else if (key == "mouse_camera") {
+        v.mouse_camera = i != 0;
+    } else if (key == "mouse_invert_y") {
+        v.mouse_invert_y = i != 0;
+    } else if (key == "mouse_sensitivity") {
+        char* end = nullptr;
+        const float sensitivity = std::strtof(value.c_str(), &end);
+        v.mouse_sensitivity = end != value.c_str() && !*end && std::isfinite(sensitivity)
+                                  ? Clamp(sensitivity, 1.f, 400.f) : 100.f;
     } else if (key == "menu_pos") {
         float x = -1.0f, y = -1.0f;
         if (std::sscanf(value.c_str(), "%f,%f", &x, &y) == 2 && x >= 0.0f && x <= 1.0f && y >= 0.0f &&
@@ -175,6 +186,9 @@ void Load() {
         {"BB_REACTIVE_MAX", "reactive_max"},
         {"BB_UPSCALE_PRESET", "preset"},
         {"BB_OBJECT_MOTION", "object_motion"},
+        {"BB_MOUSE_CAMERA", "mouse_camera"},
+        {"BB_MOUSE_SENSITIVITY", "mouse_sensitivity"},
+        {"BB_MOUSE_INVERT_Y", "mouse_invert_y"},
     };
     for (const auto& [env, key] : env_keys) {
         if (const char* value = std::getenv(env)) {
@@ -240,6 +254,8 @@ bool ResolutionNeedsRestart() {
 }
 
 void Save() {
+    static std::mutex save_mutex;
+    std::scoped_lock lock{save_mutex};
     const auto& v = Get();
     // The keys the menu writes, in this order; the rest of the file stays as it is: the
     // launcher's controls (key.* / pad.*) and its other keys, comments.
@@ -265,6 +281,9 @@ void Save() {
     put("reactive_max", fixed(v.reactive_max, 2));
     put("debug_view", std::to_string(v.debug_view.load()));
     put("show_fps", flag(v.show_fps));
+    put("mouse_camera", flag(v.mouse_camera));
+    put("mouse_invert_y", flag(v.mouse_invert_y));
+    put("mouse_sensitivity", fixed(v.mouse_sensitivity, 2));
     put("frame_generation", v.frame_generation == FrameGenerationFsr    ? "fsr"
                             : v.frame_generation == FrameGenerationDlss ? "dlss"
                                                                         : "off");

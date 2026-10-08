@@ -75,6 +75,21 @@ int main() {
     BbSettings::Load();
     assert(s.dlss_preset == 0);
     unsetenv("BB_DLSS_PRESET");
+    s.mouse_camera = true;
+    s.mouse_invert_y = true;
+    s.mouse_sensitivity = 125.5f;
+    BbSettings::Save();
+    s.mouse_camera = s.mouse_invert_y = false;
+    s.mouse_sensitivity = 100.f;
+    BbSettings::Load();
+    assert(s.mouse_camera && s.mouse_invert_y && s.mouse_sensitivity == 125.5f);
+    for (const auto& [text, expected] : {std::pair{"nan", 100.f}, {"inf", 100.f},
+                                       {"bad", 100.f}, {"0", 1.f}, {"9999", 400.f}}) {
+        setenv("BB_MOUSE_SENSITIVITY", text, 1);
+        BbSettings::Load();
+        assert(s.mouse_sensitivity == expected);
+    }
+    unsetenv("BB_MOUSE_SENSITIVITY");
     unlink(path);
     std::puts("PASS: settings persistence, DLSS model presets and environment validation");
 }

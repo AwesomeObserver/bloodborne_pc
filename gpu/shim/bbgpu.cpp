@@ -2,6 +2,7 @@
 #include "bbport_gnm_hooks.h"
 // bbport: glue between the C loader and the vendored shadPS4 video core.
 #include "bbport_overlay.h"
+#include "bbport_mouse.h"
 #include "bbport_settings.h"
 #include "bbport_copy.h"
 #ifndef _WIN32
@@ -283,7 +284,8 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
         }
         g_window_cv.notify_all();
         while (window->PollEvents()) {
-            SDL_Delay(2);
+            // Wait wakes immediately on input, rather than adding a polling delay.
+            SDL_WaitEventTimeout(nullptr, 8);
         }
         LOG_INFO(Frontend, "Window closed by user");
         std::fflush(stdout);
@@ -335,6 +337,7 @@ extern "C" int bbgpu_handle_fault(void* ucontext, void* address) {
 
 extern "C" void bbgpu_patch_image(unsigned char* image, uint64_t size) {
     BbGnmHooks::PatchImage(image, size);
+    BbMouse::Install(image, size);
 }
 
 extern "C" unsigned bbgpu_symbol_count(void) {
