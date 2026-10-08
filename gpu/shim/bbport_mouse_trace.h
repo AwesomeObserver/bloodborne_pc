@@ -28,18 +28,45 @@ inline constexpr std::array<std::uint32_t, 64> Fields{
     0x23c,0x240,0x244,0x248,0x26c,0x270,0x294};
 inline constexpr std::array<std::uint32_t, 9> AfterFields{
     0x140,0x144,0x148,0x14c,0x150,0x26c,0x270,0x130,0x294};
-inline constexpr unsigned Capacity = 4096, HeaderSize = 4096;
+// Final view basis, character/model basis and follow positions. The first
+// report only described stationary orbit response; movement needs these too.
+inline constexpr std::array<std::uint32_t, 51> ExtraFields{
+    0x10,0x14,0x18, 0x20,0x24,0x28, 0x30,0x34,0x38,
+    0x60,0x64,0x68, 0x70,0x74,0x78, 0x80,0x84,0x88,
+    0x90,0x94,0x98, 0xa0,0xa4,0xa8, 0xb0,0xb4,0xb8,
+    0xe0,0xe4,0xe8, 0xf0,0xf4,0xf8, 0x100,0x104,0x108,
+    0x110,0x114,0x118,0x124,0x134,0x138,0x158,0x17c,0x180,
+    0x184,0x188,0x278,0x27c,0x264,0x268};
+inline constexpr std::array<std::uint32_t, 8> FlagFields{
+    0x13c,0x15c,0x260,0x263,0x274,0x275,0x276,0x28c};
+inline constexpr unsigned Capacity = 16384, HeaderSize = 4096;
 struct Record {
     std::uint64_t sequence, ticks, camera;
     std::int32_t dx, dy; // raw counts multiplied by 256, not cursor pixels
     float sensitivity;
-    std::uint32_t flags; // capture=1, mouse owner=2, stick moving=4, invert Y=8
+    std::uint32_t flags; // capture=1, mouse owner=2, stick moving=4, invert Y=8, pad valid=16
     float before[Fields.size()], after[AfterFields.size()];
+    std::uint32_t reserved; // retain the complete 336-byte V1 prefix
+    std::uint64_t pad; // buttons (low 32), left X/Y, right X/Y (high 32)
+    float extra[ExtraFields.size()];
+    std::uint32_t native_flags;
 };
-static_assert(sizeof(Record) == 336 && offsetof(Record, before) == 40);
+static_assert(sizeof(Record) == 552 && offsetof(Record, before) == 40 && offsetof(Record, pad) == 336);
 inline unsigned char* mapping = nullptr;
 inline std::atomic<unsigned> next{0};
 inline std::atomic<bool> started{false};
+inline std::atomic<std::uint64_t> pad_snapshot{0};
+inline std::atomic<bool> pad_available{false};
+static_assert(decltype(pad_snapshot)::is_always_lock_free);
+
+inline void Pad(std::uint8_t lx, std::uint8_t ly, std::uint8_t rx, std::uint8_t ry,
+                std::uint32_t buttons) {
+    if (!enabled.load(std::memory_order_relaxed)) return;
+    const auto axes = std::uint32_t(lx) | std::uint32_t(ly) << 8 |
+                      std::uint32_t(rx) << 16 | std::uint32_t(ry) << 24;
+    pad_snapshot.store(std::uint64_t(buttons) | std::uint64_t(axes) << 32, std::memory_order_relaxed);
+    pad_available.store(true, std::memory_order_release);
+}
 
 // Dump only the verified routine, bounded direct callees and image constants.
 // Never follow live pointers or include game resources, player names or saves.
@@ -126,16 +153,21 @@ inline void Start(const unsigned char* image, std::uint64_t size,
         if (!mapping) return;
         // Prefault the bounded file at startup; the callback only copies to RAM.
         std::memset(mapping, 0, bytes);
-        std::memcpy(mapping, "BBMOUSE1", 8);
-        const std::uint32_t header[]{1, HeaderSize, sizeof(Record), Capacity};
+        std::memcpy(mapping, "BBMOUSE2", 8);
+        const std::uint32_t header[]{2, HeaderSize, sizeof(Record), Capacity};
         std::memcpy(mapping + 8, header, sizeof(header));
         LARGE_INTEGER frequency{};
         QueryPerformanceFrequency(&frequency);
         std::memcpy(mapping + 24, &frequency.QuadPart, 8);
         const std::uint32_t counts[]{Fields.size(), AfterFields.size()};
         std::memcpy(mapping + 32, counts, sizeof(counts));
+        const std::uint32_t extension[]{ExtraFields.size(), FlagFields.size()};
+        std::memcpy(mapping + 40, extension, sizeof(extension));
         std::memcpy(mapping + 64, Fields.data(), sizeof(Fields));
         std::memcpy(mapping + 64 + sizeof(Fields), AfterFields.data(), sizeof(AfterFields));
+        std::memcpy(mapping + 64 + sizeof(Fields) + sizeof(AfterFields), ExtraFields.data(), sizeof(ExtraFields));
+        std::memcpy(mapping + 64 + sizeof(Fields) + sizeof(AfterFields) + sizeof(ExtraFields),
+                    FlagFields.data(), sizeof(FlagFields));
         enabled.store(1, std::memory_order_release);
         std::printf("Mouse trace: logs/%ls; recording %u updates after first mouse motion; camera behavior unchanged\n",
                     name, Capacity);
@@ -167,8 +199,16 @@ struct Sample {
         record.camera = reinterpret_cast<std::uintptr_t>(pointer);
         record.dx = std::int32_t(motion); record.dy = std::int32_t(motion >> 32);
         record.sensitivity = sensitivity; record.flags = flags;
+        if (pad_available.load(std::memory_order_acquire)) {
+            record.pad = pad_snapshot.load(std::memory_order_relaxed);
+            record.flags |= 16;
+        }
         for (unsigned n = 0; n < Fields.size(); ++n)
             std::memcpy(record.before + n, camera + Fields[n], 4);
+        for (unsigned n = 0; n < ExtraFields.size(); ++n)
+            std::memcpy(record.extra + n, camera + ExtraFields[n], 4);
+        for (unsigned n = 0; n < FlagFields.size(); ++n)
+            record.native_flags |= unsigned(camera[FlagFields[n]] != 0) << n;
     }
     ~Sample() {
         if (!camera) return;

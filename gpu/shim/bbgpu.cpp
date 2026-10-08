@@ -403,8 +403,8 @@ extern "C" uint32_t bbgpu_mouse_buttons(void) {
     return g_window ? g_window->GetMouseButtons() : 0;
 }
 
-extern "C" void bbgpu_camera_stick(uint8_t x, uint8_t y) {
-    BbMouse::Stick(x, y);
+extern "C" void bbgpu_camera_pad(uint8_t lx, uint8_t ly, uint8_t rx, uint8_t ry, uint32_t buttons) {
+    BbMouse::Pad(lx, ly, rx, ry, buttons);
 }
 
 extern "C" int bbgpu_text_input_begin(const char* initial, const char* prompt) {

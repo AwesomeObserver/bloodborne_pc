@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "bbport_mouse_trace.h"
+#include "bbport_mouse.h"
 #include "test_assert.h"
 #include <thread>
 
@@ -29,12 +30,15 @@ int main(int argc, char** argv) {
     }
     using namespace BbMouse::Trace;
     assert(enabled.load());
-    assert(!std::memcmp(mapping, "BBMOUSE1", 8));
+    assert(!std::memcmp(mapping, "BBMOUSE2", 8));
     std::array<unsigned char, 0x298> camera{};
     const float before = .25f, after = -.5f;
     for (auto offset : Fields) std::memcpy(camera.data() + offset, &before, 4);
+    for (auto offset : ExtraFields) std::memcpy(camera.data() + offset, &before, 4);
+    camera[FlagFields[0]]=1; camera[FlagFields[3]]=1;
     { Sample ignored(camera.data(), 0, 100.f, 3); }
     assert(next.load() == 0); // title/menu waiting cannot exhaust the budget
+    BbMouse::Pad(37,37,128,128,0x2000); // same publisher used by the runtime's final pad sample
     const auto motion = std::uint64_t(std::uint32_t(-256)) | std::uint64_t(512) << 32;
     {
         Sample first(camera.data(), motion, 125.f, 11);
@@ -42,21 +46,36 @@ int main(int argc, char** argv) {
     }
     auto* first = reinterpret_cast<Record*>(mapping + HeaderSize);
     assert(first->sequence == 1 && first->dx == -256 && first->dy == 512);
-    assert(first->ticks && first->sensitivity == 125.f && first->flags == 11);
+    assert(first->ticks && first->sensitivity == 125.f && first->flags == 27);
     for (auto field : first->before) assert(field == before);
     for (auto field : first->after) assert(field == after);
+    for (auto field : first->extra) assert(field == before);
+    assert(first->native_flags==9 && first->pad==0x8080252500002000ull);
+    BbMouse::Pad(218,37,128,128,0);
     { Sample native(camera.data(), 0, 100.f, 0); }
     auto* second = first + 1;
-    assert(second->sequence == 2 && second->flags == 0 && second->dx == 0);
+    assert(second->sequence == 2 && second->flags == 16 && second->dx == 0);
+    assert(second->pad==0x808025da00000000ull);
     // Distinct slots are safe even if two camera callbacks overlap. Collection
     // cannot write past the fixed budget or block on a logger/allocator.
     const auto fill = [&] { for (unsigned n = 0; n < Capacity; ++n) { Sample sample(camera.data(), 0, 100.f, 3); } };
+    std::atomic<bool> finished{false};
+    std::thread input([&] {
+        while (!finished.load(std::memory_order_relaxed)) {
+            Pad(37,37,17,231,0x2000);
+            Pad(218,37,128,128,0);
+        }
+    });
     std::thread a(fill), b(fill);
     a.join(); b.join();
+    finished.store(true, std::memory_order_relaxed); input.join();
     assert(!enabled.load());
-    for (unsigned n = 0; n < Capacity; ++n) assert(first[n].sequence == n + 1);
+    for (unsigned n = 0; n < Capacity; ++n) {
+        assert(first[n].sequence == n + 1);
+        if (n>1) assert(first[n].pad==0xe711252500002000ull || first[n].pad==0x808025da00000000ull);
+    }
     if (argc > 1 && !std::strcmp(argv[1], "terminate"))
         TerminateProcess(GetCurrentProcess(), 8); // no destructor or explicit flush
     assert(FlushViewOfFile(mapping, 0));
-    std::puts("Mouse trace: disabled/failure paths, signed packets, pre/post state, native ownership and bounded concurrent collection passed");
+    std::puts("Mouse trace: disabled/failure paths, signed packets, camera basis/follow state, atomic final pad samples, native ownership and bounded concurrent collection passed");
 }

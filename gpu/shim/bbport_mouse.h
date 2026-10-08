@@ -14,6 +14,7 @@ void Motion(float dx, float dy);
 // Final pad state, including keyboard look bindings. A deliberate stick movement
 // returns camera ownership to the game; mouse motion takes it back after release.
 void Stick(std::uint8_t x, std::uint8_t y);
+void Pad(std::uint8_t lx, std::uint8_t ly, std::uint8_t rx, std::uint8_t ry, std::uint32_t buttons);
 // Runs on the guest camera thread, before its update prologue/angle calculations.
 void Apply(void* camera);
 } // namespace BbMouse

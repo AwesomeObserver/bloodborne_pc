@@ -128,5 +128,13 @@ enable F4 and record direction reversals, vertical sweeps and stops for about
 The direct mouse-orbit fix is active in normal launches; tracing is optional.
 Its isolated camera-code replay passed. Full gameplay validation remains pending.
 
+Sustained diagonal movement diagnostics: run Trace Keyboard Movement.cmd.
+After loading, enable F4 and move the mouse once. Hold W for 3 seconds,
+W+A for 5 seconds, then W+D for 5 seconds without moving the mouse.
+Repeat while looking around, then disable F4 and repeat W/W+A/W+D.
+Close the game and send the mouse-camera ZIP from logs\.
+The V2 report records final pad state, camera bases and follow vectors together.
+This diagnostic update does not fix the reported F4-only movement issue.
+
 GNU GPL v2 or later. See LICENSE, licenses\ and README.md for third-party credits.
 Not affiliated with Sony Interactive Entertainment or FromSoftware.

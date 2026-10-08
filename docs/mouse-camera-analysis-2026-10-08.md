@@ -75,3 +75,18 @@ does not execute level geometry, physics, presentation or the complete camera
 routine. Free rotation near walls, movement, binoculars, scripted transitions and
 mouse/controller switching still need confirmation in the game. The report and
 captured game routine are local verification inputs, not repository/package assets.
+
+## Sustained diagonal movement report
+
+The later report of jerks during W+A/W+D remains unresolved. The user confirmed
+that they continue throughout the held combination and occur only with F4 enabled.
+The circular keyboard mapping passed its isolated pad tests but did not resolve
+the gameplay issue. Those tests do not validate the camera/character interaction.
+
+In the original supplied trace, the focus and reference positions remain constant
+after initialization. It therefore contains no moving-character evidence for this
+issue. The V2 diagnostic format records the final pad state together with camera
+bases, follow vectors and state flags. A comparison of held diagonals with F4 on
+and off is required before attributing the jerks to a particular camera operation.
+Movement input and the working raw mouse response are unchanged by this diagnostic
+update.

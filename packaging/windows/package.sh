@@ -56,6 +56,7 @@ ldd "$dest/bin/bb-probe.exe" "$dest/bin/bb-gpu-capabilities.exe" |
 cp -r scripts patches "$dest/"
 cp run.py LICENSE VERSION.txt README.md packaging/windows/README-Windows.txt "$dest/"
 cp "packaging/windows/Trace Mouse Camera.cmd" "$dest/"
+cp "packaging/windows/Trace Keyboard Movement.cmd" "$dest/"
 mkdir -p "$dest/licenses"
 cp gpu/third_party/fsr-vulkan/LICENSE.txt "$dest/licenses/FSR-Vulkan-LICENSE.txt"
 cp gpu/third_party/fsr-vulkan/upstream/ffx-1.1.4/sdk/LICENSE.txt "$dest/licenses/FidelityFX-SDK-LICENSE.txt"

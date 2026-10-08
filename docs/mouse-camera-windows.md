@@ -161,6 +161,13 @@ about 15 seconds reversing left/right, sweeping up/down and stopping completely.
 Close the game. The script creates **logs/mouse-camera-*.zip** for this session.
 Python installation is not required. Starting the game normally leaves tracing off.
 
+For sustained movement jerks, run **Trace Keyboard Movement.cmd**. After loading,
+enable F4 and move the mouse once to start recording. In an open area, hold W for
+3 seconds, W+A for 5 seconds and W+D for 5 seconds with the mouse still. Repeat
+while looking around, then turn F4 off and repeat the movement combinations.
+Close the game to collect the ZIP. This procedure captures both sides of the F4
+comparison; collecting a report does not fix movement.
+
 The report includes the raw X/Y counts, sensitivity, ownership flags, camera angles,
 follow parameters, position/reference/focus vectors and the unmodified camera
 routine with bounded direct callees and referenced constants. `before_*` fields
@@ -169,8 +176,15 @@ are sampled at update entry; position then reflects the preceding game update.
 camera-object addresses must be analyzed separately. This makes it possible to
 distinguish input loss, angle feedback and subsequent camera-position chasing.
 
-Recording starts at the first mouse movement and stops after 4096 camera updates.
-The fixed file is approximately 1.32 MiB. Startup creates and prefaults the mapping;
+V2 reports additionally record the final pad buttons and all four axes as one
+atomic snapshot, the view and character bases, follow vectors and native camera
+flags/timers. Pad values include remapping, scripted input and replay. They are
+the most recent complete pad sample, not a new poll from the camera thread.
+The metadata counts diagonal samples with capture on/off and mouse ownership.
+The exporter continues to read older V1 reports.
+
+Recording starts at the first mouse movement and stops after 16384 camera updates.
+The fixed V2 file is approximately 8.63 MiB. Startup creates and prefaults the mapping;
 camera callbacks perform bounded memory copies, with no allocation, file API calls
 or logger locks. Original code is disassembled once before the hooks are installed.
 No assets, saves, player names or settings are collected.

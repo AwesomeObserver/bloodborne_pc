@@ -307,6 +307,14 @@ void Stick(std::uint8_t x, std::uint8_t y) {
         pending_motion.exchange(0, std::memory_order_relaxed);
     }
 }
+void Pad(std::uint8_t lx, std::uint8_t ly, std::uint8_t rx, std::uint8_t ry, std::uint32_t buttons) {
+    Stick(rx, ry);
+#ifdef _WIN32
+    Trace::Pad(lx, ly, rx, ry, buttons);
+#else
+    (void)lx; (void)ly; (void)buttons;
+#endif
+}
 void Apply(void* pointer) {
     const bool captured = active.load(std::memory_order_acquire);
     const auto motion = captured ? pending_motion.exchange(0, std::memory_order_relaxed) : 0;

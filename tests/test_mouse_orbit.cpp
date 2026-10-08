@@ -132,8 +132,9 @@ void Replay(const char* path,RunOrbit run,OrbitCase& data,void* block) {
     std::array<unsigned char,4096> header{};
     assert(bool(file.read(reinterpret_cast<char*>(header.data()),header.size())));
     const auto word=[&](unsigned at) { std::uint32_t value; std::memcpy(&value,header.data()+at,4); return value; };
-    assert(!std::memcmp(header.data(),"BBMOUSE1",8) && word(8)==1 && word(12)==4096 &&
-           word(16)==336 && word(20)<=4096 && word(32)==64 && word(36)==9);
+    const bool v1=!std::memcmp(header.data(),"BBMOUSE1",8) && word(8)==1 && word(16)==336 && word(20)==4096;
+    const bool v2=!std::memcmp(header.data(),"BBMOUSE2",8) && word(8)==2 && word(16)==552 && word(20)==16384;
+    assert((v1 || v2) && word(12)==4096 && word(32)==64 && word(36)==9);
     struct Record {
         std::uint64_t sequence,ticks,camera;
         std::int32_t dx,dy;
@@ -149,6 +150,7 @@ void Replay(const char* path,RunOrbit run,OrbitCase& data,void* block) {
     data.old=Vector(0,0);
     for (unsigned i=0;i<word(20);++i) {
         assert(bool(file.read(reinterpret_cast<char*>(&record),sizeof(record))));
+        if (v2) assert(bool(file.seekg(word(16)-sizeof(record),std::ios::cur)));
         if (!record.sequence) break;
         assert(record.sequence==i+1);
         for (unsigned n=0;n<64;++n) {

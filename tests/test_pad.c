@@ -7,9 +7,14 @@
 static int capture;
 static Uint32 mouse_buttons;
 static uint8_t camera_x, camera_y;
+static uint8_t traced_left_x, traced_left_y;
+static uint32_t traced_buttons;
 int bbgpu_overlay_captures_input(void) { return capture; }
 uint32_t bbgpu_mouse_buttons(void) { return mouse_buttons; }
-void bbgpu_camera_stick(uint8_t x, uint8_t y) { camera_x=x; camera_y=y; }
+void bbgpu_camera_pad(uint8_t lx, uint8_t ly, uint8_t rx, uint8_t ry, uint32_t buttons) {
+    traced_left_x=lx; traced_left_y=ly; traced_buttons=buttons;
+    camera_x=rx; camera_y=ry;
+}
 uintptr_t runtime_lookup(const RuntimeExport *table, size_t count, const char *name) {
     (void)table; (void)count; (void)name;
     return 0;
@@ -49,6 +54,7 @@ static void test_keyboard_movement(SDL_Joystick *joystick) {
         SDL_UpdateJoysticks(); SDL_UpdateGamepads();
         PadData analog;
         assert(pad_read_state(1,&analog)==0);
+        assert(traced_left_x==analog.left_x && traced_left_y==analog.left_y && traced_buttons==analog.buttons);
         assert(mapped.left_x==analog.left_x && mapped.left_y==analog.left_y);
         assert(mapped.right_x==17 && mapped.right_y==231);
         const float vx=((int)mapped.left_x-128)/128.0f;
