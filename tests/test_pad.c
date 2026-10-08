@@ -37,9 +37,9 @@ static void movement_keys(bool *keys, unsigned held) {
 
 static void test_keyboard_movement(SDL_Joystick *joystick) {
     bool keys[SDL_SCANCODE_COUNT]={0};
-    /* Check the delivered 8-bit vector, including quantization. A float unit
-     * vector converted through SDL can overshoot this circle in the negative
-     * quadrant. Compare against safe virtual-controller directions too. */
+    /* The report's W+D=(218,37) worked while W+A=(37,37) jerked. Preserve
+     * that forward/right vector and mirror it for forward/left. All diagonal
+     * directions retain near-full strength without equal-axis 45-degree ties. */
     for (unsigned held=0;held<16;++held) {
         movement_keys(keys,held);
         PadData mapped={.left_x=128,.left_y=128,.right_x=17,.right_y=231};
@@ -48,10 +48,12 @@ static void test_keyboard_movement(SDL_Joystick *joystick) {
         const int y=((held&2)!=0)-((held&1)!=0);
         const int delivered_x=(int)mapped.left_x-128, delivered_y=(int)mapped.left_y-128;
         assert(delivered_x*delivered_x+delivered_y*delivered_y<=128*128);
-        if (x && y) assert(delivered_x==90*x && delivered_y==90*y);
-        const int magnitude=x && y ? 23040 : 32767;
-        const int raw_x=x<0 && !y ? -32768 : x*magnitude;
-        const int raw_y=y<0 && !x ? -32768 : y*magnitude;
+        if (x && y) {
+            assert(delivered_x==90*x && delivered_y==91*y);
+            assert(delivered_x*delivered_x+delivered_y*delivered_y>=128*128-4);
+        }
+        const int raw_x=x && y ? x*23040 : x<0 ? -32768 : x*32767;
+        const int raw_y=x && y ? y*23296 : y<0 ? -32768 : y*32767;
         assert(SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_LEFTX,(Sint16)raw_x));
         assert(SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_LEFTY,(Sint16)raw_y));
         SDL_UpdateJoysticks(); SDL_UpdateGamepads();
@@ -73,7 +75,7 @@ static void test_keyboard_movement(SDL_Joystick *joystick) {
         movement_keys(keys,transitions[n]);
         PadData mapped={.left_x=128,.left_y=128};
         apply_keyboard(&mapped,keys,0);
-        assert(mapped.left_y==(transitions[n]==1 ? 0 : 38));
+        assert(mapped.left_y==(transitions[n]==1 ? 0 : 37));
         assert(mapped.left_x==(transitions[n]==1 ? 128 : transitions[n]==5 ? 38 : 218));
     }
     /* Every possible physical axis pair mixed with each nonempty WASD state
@@ -95,7 +97,14 @@ static void test_keyboard_movement(SDL_Joystick *joystick) {
     keys[SDL_SCANCODE_W]=true;
     mixed.left_x=255; mixed.left_y=128;
     apply_keyboard(&mixed,keys,0);
-    assert(mixed.left_x==218 && mixed.left_y==38); /* W + native X share the circle */
+    assert(mixed.left_x==218 && mixed.left_y==37); /* W + native X share the circle */
+    /* A normalized negative component can truncate to zero. Its rounding
+     * candidate must still use the original sign, like its positive mirror. */
+    for (unsigned px=127;px<=129;px+=2) {
+        mixed.left_x=(uint8_t)px; mixed.left_y=128;
+        apply_keyboard(&mixed,keys,0);
+        assert(mixed.left_x==px && mixed.left_y==1);
+    }
     keys[SDL_SCANCODE_S]=true;
     mixed.left_x=63; mixed.left_y=211;
     apply_keyboard(&mixed,keys,0);
@@ -238,11 +247,11 @@ int main(void) {
     keyboard[SDL_SCANCODE_T]=keyboard[SDL_SCANCODE_H]=true;
     mapped=(PadData){.left_x=128,.left_y=128};
     apply_keyboard(&mapped,keyboard,0);
-    assert(mapped.left_x==218 && mapped.left_y==38);
+    assert(mapped.left_x==218 && mapped.left_y==37);
     keyboard[SDL_SCANCODE_T]=false;
     mapped=(PadData){.left_x=128,.left_y=128};
     apply_keyboard(&mapped,keyboard,SDL_BUTTON_LMASK);
-    assert(mapped.left_x==218 && mapped.left_y==38);
+    assert(mapped.left_x==218 && mapped.left_y==37);
     keyboard[SDL_SCANCODE_H]=false;
     mouse_buttons=SDL_BUTTON_RMASK;
     capture=1;
@@ -256,5 +265,5 @@ int main(void) {
     SDL_Quit();
     unlink(path);
     unlink(config);
-    puts("PASS: pad ABI, circular keyboard movement after quantization, symmetric diagonals, exhaustive mixed input, W/A/D transitions, opposing keys, native/remapped input, debug camera chord, left/right clicks, SDL touch coordinates, overlay capture, controls");
+    puts("PASS: pad ABI, near-full keyboard diagonals, recorded W+D preservation, mirrored W+A, exhaustive mixed input, W/A/D transitions, opposing keys, native/remapped input, debug camera chord, left/right clicks, SDL touch coordinates, overlay capture, controls");
 }

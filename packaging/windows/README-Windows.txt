@@ -134,9 +134,11 @@ W+A for 5 seconds, then W+D for 5 seconds without moving the mouse.
 Repeat while looking around, then disable F4 and repeat W/W+A/W+D.
 Close the game and send the mouse-camera ZIP from logs\.
 The V2 report records final pad state, camera bases and follow vectors together.
-Keyboard diagonals now stay symmetric and within the stick range after rounding.
-The previous W+A vector exceeded that range while W+D stayed inside it.
-The input regression is fixed; confirmation of the reported gameplay stop is pending.
+For a controller comparison, leave F4 enabled and move the mouse once before
+repeating the same movement directions with the left stick. Keep the right stick neutral.
+The previous inward-rounding change was rejected after it made W+D jerk too.
+This build restores the previously working W+D value and mirrors it for W+A.
+Confirmation of the reported gameplay stop is pending.
 
 GNU GPL v2 or later. See LICENSE, licenses\ and README.md for third-party credits.
 Not affiliated with Sony Interactive Entertainment or FromSoftware.

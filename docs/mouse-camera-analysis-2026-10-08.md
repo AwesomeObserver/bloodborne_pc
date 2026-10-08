@@ -76,7 +76,7 @@ routine. Free rotation near walls, movement, binoculars, scripted transitions an
 mouse/controller switching still need confirmation in the game. The report and
 captured game routine are local verification inputs, not repository/package assets.
 
-## Movement report and keyboard quantization
+## Movement report and rejected quantization change
 
 The later `mouse-camera-20261008-190629-15948.zip` contains 4523 updates over
 37.684 seconds, including held W, W+A and W+D with F4 enabled and disabled.
@@ -89,38 +89,50 @@ the mouse owns rotation, the next entry angles match the preceding post-input
 angles; view yaw agrees with the stored yaw within approximately `7e-7` radians.
 The capture does not show angle feedback or ownership changes causing the jerks.
 
-It does expose asymmetric rounding in the previous keyboard mapping:
+The original input values and the subsequent change were:
 
-| Input | Previous pad X/Y | Offset from center 128 | Offset length | Corrected pad X/Y |
-| --- | --- | --- | --- | --- |
-| W | 128 / 0 | 0 / -128 | 128 | 128 / 0 |
-| W+A | 37 / 37 | -91 / -91 | 128.693 | 38 / 38 |
-| W+D | 218 / 37 | 90 / -91 | 127.988 | 218 / 38 |
+| Input | Original report X/Y | Rejected change X/Y | Current X/Y |
+| --- | --- | --- | --- |
+| W | 128 / 0 | 128 / 0 | 128 / 0 |
+| W+A | 37 / 37 | 38 / 38 | 38 / 37 |
+| W+D | 218 / 37 | 218 / 38 | 218 / 37 |
 
-Float normalization followed by the SDL signed-16-bit to unsigned-8-bit conversion
-put W+A outside the radius-128 circle, while W+D stayed inside. The earlier test
-also converted its reference controller values through that path and allowed a
-one-percent magnitude tolerance, so it missed the defect.
+Commit `7c6d2e8` rounded both diagonal components toward zero to keep their offset
+inside a radius-128 circle. Its isolated input tests passed, but the user rejected
+the gameplay result: W+A still jerked and W+D started doing so too. The jerks
+continue while held; physical controller movement remains normal with F4 enabled.
+That result invalidates the proposed fix. A radius check alone does not establish
+the cause of the gameplay problem. Physical controller values can also round
+outside this mathematical circle and must remain untouched.
 
-Keyboard normalization now operates in the final 8-bit pad coordinate space.
-Scaling and truncation toward the center keep the delivered vector inside the
-circle. All four keyboard diagonals have offsets of 90 on each axis and length
-127.279, about 99.44 percent of radius 128. Cardinals and opposing-key cancellation
-remain immediate; no temporal filtering is added. Controller-only samples and
-raw mouse camera code are unchanged. Mixed keyboard/controller movement is also
-bounded after quantization.
+The rejected change reduced both diagonal offsets to `(90,90)`: length 127.279,
+approximately 99.44 percent of radius 128, and exactly 45 degrees. The original
+W+D offset `(90,-91)` has length 127.988, approximately 99.99 percent, and an angle
+of approximately 44.683 degrees from forward. The original W+A offset `(-91,-91)`
+was exactly 45 degrees. The captured routine does not include character animation
+selection; an unstable movement-sector boundary at exactly 45 degrees is a
+hypothesis, not a verified game-code finding.
 
-The regression checks all 16 WASD combinations, repeated W/A/D transitions,
-remapped keys and mouse bindings, and all 983040 combinations of nonempty WASD
-states with physical 8-bit axis pairs. It also verifies native controller
-passthrough. The new circle check fails on the previous mapping and passes with
-the correction. All 11 relevant native input, camera, runtime and startup checks
-passed.
+## Current keyboard mapping and validation limits
 
-This establishes an input defect, not the complete cause of the gameplay stop.
-The rounding asymmetry exists with F4 both on and off. The recorded character
-positions alone cannot distinguish intentional turning and level collisions from
-the reported jerks. Gameplay confirmation is still required, especially while
-adding and releasing A during forward motion. The V2 movement report remains
-available for further comparison; private reports and captured game code are
-not distributed.
+The current mapping restores the W+D sample that the user reported as working and
+mirrors it around neutral X=128 for W+A. Normalization considers the neighboring
+integer coordinates and selects the nearest candidate inside the radius-128
+circle. Equal-error choices prefer the vertical component. All keyboard diagonals
+therefore use horizontal offsets of 90 and vertical offsets of 91, preserving
+near-full strength without placing the input at exactly 45 degrees. Cardinals,
+opposing-key cancellation and mixed controller axes retain their existing behavior.
+There is no temporal filtering or change to the working raw mouse camera hooks.
+
+The input regression requires the recorded W+D `(218,37)` to remain unchanged,
+W+A to be its mirror `(38,37)`, and diagonal squared magnitude to be at least 16380
+and at most 16384. It also checks all 16 WASD states, repeated held-direction
+transitions, remapped keys/mouse buttons, physical controller passthrough and
+983040 mixed keyboard/controller states. This rejects both previous mappings.
+These checks validate delivered input, not character motion or animation.
+
+Gameplay confirmation is still required. If jerks remain, a V2 report should
+compare keyboard and physical-controller diagonals in the same open area, with
+F4 enabled and mouse ownership established before both cases. Keep the right
+stick neutral so it does not return rotation to the native camera. Private reports
+and captured game code are not distributed.

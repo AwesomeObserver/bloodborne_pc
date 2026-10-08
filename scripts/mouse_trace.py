@@ -122,8 +122,9 @@ def main():
             print('After loading a character, enable F4 and move the mouse once to start recording.\n'
                   'In an open area: hold W for 3 seconds, W+A for 5 seconds, then W+D for 5 seconds.\n'
                   'Repeat with the mouse moving. Disable F4 and repeat W, W+A and W+D.\n'
+                  'For a controller comparison, enable F4 and move the mouse once, then repeat the directions with the left stick; keep the right stick neutral.\n'
                   'Close the game; the report ZIP will appear in logs. Recording is limited to 16384 camera updates.\n'
-                  'This diagnostic build records the issue; it does not change movement or camera behavior.', flush=True)
+                  'Tracing is optional and does not alter input or camera behavior.', flush=True)
         else:
             print('Load a character, enable F4 and record left/right reversals, up/down sweeps and stops for about 15 seconds. '
                   'Then close the game. Recording stops after 16384 camera updates.', flush=True)

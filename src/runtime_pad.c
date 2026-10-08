@@ -268,11 +268,11 @@ static int pad_value(SDL_Gamepad *g, int input) {
 static uint8_t key_axis(uint8_t value, int negative, int positive) {
     return negative || positive ? (uint8_t)(128-(negative ? 128 : 0)+(positive ? 127 : 0)) : value;
 }
-/* Limit movement in the final 8-bit pad space, centered at 128. Normalizing
- * through SDL's signed 16-bit conversion rounded W+A to (-91,-91), outside
- * the radius-128 circle, but W+D to (90,-91). Quantize toward the center so
- * mirrored keyboard diagonals stay symmetric and inside the circle.
- * Keep unbound axes from the gamepad and controller-only samples intact. */
+/* Use the nearest representable direction inside the final 8-bit stick circle.
+ * Truncating both components loses strength and puts both forward diagonals
+ * exactly at 45 degrees. Prefer the vertical component for equal-error choices:
+ * W+D retains the known-working (218,37), with W+A mirrored to (38,37).
+ * No temporal filtering; controller-only samples remain untouched. */
 static void key_movement(PadData *d, int left, int right, int up, int down) {
     if (!(left || right || up || down)) return;
     int x=left || right ? ((right!=0)-(left!=0))*128 : (int)d->left_x-128;
@@ -280,7 +280,19 @@ static void key_movement(PadData *d, int left, int right, int up, int down) {
     const int length2=x*x+y*y;
     if (length2>128*128) {
         const float scale=128.0f/SDL_sqrtf((float)length2);
-        x=(int)(x*scale); y=(int)(y*scale);
+        const float target_x=x*scale, target_y=y*scale;
+        const int base_x=(int)target_x, base_y=(int)target_y;
+        x=base_x; y=base_y;
+        float error=(x-target_x)*(x-target_x)+(y-target_y)*(y-target_y);
+        /* Try vertical rounding first, so a diagonal tie consistently favors
+         * forward/backward movement. Check bounds after rounding, not before. */
+        for (unsigned round=1;round<4;++round) {
+            const int cx=base_x+((round&2) ? (target_x<0 ? -1 : 1) : 0);
+            const int cy=base_y+((round&1) ? (target_y<0 ? -1 : 1) : 0);
+            if (cx*cx+cy*cy>128*128) continue;
+            const float candidate_error=(cx-target_x)*(cx-target_x)+(cy-target_y)*(cy-target_y);
+            if (candidate_error<error) { x=cx; y=cy; error=candidate_error; }
+        }
     }
     d->left_x=(uint8_t)(x>127 ? 255 : x+128);
     d->left_y=(uint8_t)(y>127 ? 255 : y+128);

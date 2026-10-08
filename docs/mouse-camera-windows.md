@@ -168,6 +168,10 @@ while looking around, then turn F4 off and repeat the movement combinations.
 Close the game to collect the ZIP. This procedure captures both sides of the F4
 comparison; collecting a report does not fix movement.
 
+For a controller comparison, enable F4 and move the mouse once before repeating
+the directions with the physical left stick. Keep the right stick neutral so the
+same mouse-owned camera path remains active for both input sources.
+
 The report includes the raw X/Y counts, sensitivity, ownership flags, camera angles,
 follow parameters, position/reference/focus vectors and the unmodified camera
 routine with bounded direct callees and referenced constants. `before_*` fields
