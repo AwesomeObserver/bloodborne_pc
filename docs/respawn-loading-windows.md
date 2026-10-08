@@ -57,6 +57,41 @@ game version 1.09**. The report contains guest offsets, but no instructions at t
 offsets; the executable is unavailable in this workspace. An entire game directory
 or save data is not needed for that analysis.
 
+## Second capture: optimized collector
+
+`loading-20261009-010932-812147.zip` has SHA-256
+`7fdf612e4033b9edc71888c5b790e647f151de541b91e26261b4e88d234431b9`.
+Its schema 2 collector hash matches the R2 add-on. Package metadata identifies the
+Vulkan command-data crash fix; the logged PE timestamp `6ac80a95` also matches the
+local executable in that package. This still does not substitute for hashing the
+actual executable used on the reporting computer.
+
+| Marked interval | Capture seconds | Elapsed |
+| --- | --- | --- |
+| Continue | 26.3314–29.9489 | 3.6175 s |
+| Death loading screen to controllable character | 61.0819–74.6958 | 13.6139 s |
+
+The respawn pause persists with R2: mean wall time inside a sampler call falls from
+68.05 ms to 13.51 ms, while the marked respawn still takes approximately 13.6 seconds.
+These are elapsed sampler call times, not CPU measurements. Different package
+versions, caches and manual marker timing also prevent treating the two captures
+as a controlled performance benchmark.
+
+Nearest process samples show approximately 317.8 MiB of logical reads during
+Continue and 266.8 MiB during respawn. The read-byte counter does not change between
+capture seconds **61.8278 and 73.2525**, an **11.4247-second** interval. This confirms
+the separation between two resource-loading bursts, without identifying whether a
+timer, dependency or unfinished blocking I/O causes it.
+
+The native frame log contains 7,772 flips over 64.9604 seconds. In native frame
+clock seconds 50–60, the loading screen submits 240 flips per two-second window,
+approximately 170 draws per flip, and no frame longer than 9.31 ms. All logged GPU
+buffer readbacks together take 69.725 ms over the session. The guest wait table
+again reaches 512 entries in its first window. These findings strengthen the
+previous conclusion but do not identify a safe game code change. No additional
+capture or timing bypass is proposed at this stage; the matching game executable
+is still needed to examine the guest instructions.
+
 ## What was checked
 
 - The host runtime has no explicit death-specific loading pause. Its guest sleep
