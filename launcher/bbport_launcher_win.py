@@ -40,7 +40,7 @@ PATCH_VERSION = '01.09'
 MAX_LOG_LINES = 6000
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 # This build; GitHub release tags are windows-v<VERSION>.
-VERSION = '1.5'
+VERSION = ((Path(sys._MEIPASS) if FROZEN else PORT_DIR) / 'VERSION.txt').read_text(encoding='ascii').strip()
 RELEASES_API = 'https://api.github.com/repos/AwesomeObserver/bloodborne_pc/releases/latest'
 RELEASES_PAGE = 'https://github.com/AwesomeObserver/bloodborne_pc/releases/latest'
 UPDATE_DIR = Path(tempfile.gettempdir()) / 'bbport-update'
@@ -379,13 +379,16 @@ class Launcher:
         self.ini, self.ini_lines = load_ini()
         self.vars = {}
         self.process = self.job = None
+        self.capture_process = None
+        self.capture_after = None
+        self.binding_buttons = []
         self.downloading = False
         self.output = queue.Queue()
         self.gpu_text = _('• Checking the graphics card…', '• Проверка видеокарты…')
         self.banner_source = self.banner_image = None
         self.ui_calls = queue.Queue()  # work for the Tk thread from helper threads
         self.mod_order, self.mod_vars, self.patch_vars = [], {}, {}
-        root.title('Bloodborne — bbport')
+        root.title(f'Bloodborne — bbport v{VERSION}')
         root.configure(bg=BG)
         self.dpi = root.winfo_fpixels('1i') / 96.0
         root.geometry(f'{self.px(1120)}x{self.px(740)}')
@@ -902,23 +905,109 @@ class Launcher:
         self.ttk.Button(holder, text=_('Refresh', 'Обновить'), command=self.refresh_gamepads).pack(side='left', padx=6)
         self.row(f, _('Controller', 'Контроллер'), holder)
         self.refresh_gamepads()
-        self.note(f, _('Use SDL names, separated by commas. Empty means unassigned. Changes apply at the next start.',
-                       'Имена SDL через запятую. Пустое поле отключает действие. Изменения применяются при запуске.'))
-        for kind, title in (('key', _('Keyboard', 'Клавиатура')), ('pad', _('Controller buttons', 'Кнопки контроллера'))):
+        self.note(f, _('Click a binding, then press the desired key or button. + adds an alternative (up to four); '
+                       'Clear removes all bindings. Close the capture window to cancel. Changes apply at the next start.',
+                       'Нажмите на назначение, затем нужную клавишу или кнопку. + добавляет альтернативу (до четырёх); '
+                       '«Очистить» удаляет назначения. Для отмены закройте окно захвата. Изменения применяются при запуске.'))
+        for kind, title in (('key', _('Keyboard & mouse', 'Клавиатура и мышь')),
+                            ('pad', _('Controller buttons', 'Кнопки контроллера'))):
             self.section(f, title)
             for name, label, keys, buttons in CONTROLS:
                 if kind == 'pad' and buttons is None:
                     continue
                 key = f'{kind}.{name}'
-                entry = self.ttk.Entry(f, textvariable=self.var(key, 'ini'), width=36)
-                self.row(f, _(*label), entry)
+                self.row(f, _(*label), self.binding_control(f, key, _(*label)))
         self.ttk.Button(f, text=_('Restore default controls', 'Вернуть стандартное управление'),
                         command=self.reset_controls).grid(row=self.next_row(f), column=1, sticky='w', pady=12)
 
     def reset_controls(self):
+        self.cancel_capture()
         for key, value in INI_DEFAULTS.items():
             if key.startswith(('key.', 'pad.', 'mouse_')):
                 self.var(key, 'ini').set(value)
+
+    def binding_control(self, parent, key, label):
+        holder = self.ttk.Frame(parent)
+        value = self.var(key, 'ini')
+        display = self.tk.StringVar()
+        def refresh(*_args):
+            display.set(value.get() or _('Unassigned', 'Не назначено'))
+        value.trace_add('write', refresh)
+        refresh()
+        for text, command, width in (
+                (None, lambda: self.capture_binding(key, label), 29),
+                ('+', lambda: self.capture_binding(key, label, append=True), 3),
+                (_('Clear', 'Очистить'), lambda: value.set(''), 9)):
+            button = self.ttk.Button(holder, command=command, width=width,
+                                     **({'textvariable': display} if text is None else {'text': text}))
+            button.pack(side='left', padx=(0, 5))
+            self.binding_buttons.append(button)
+        return holder
+
+    def capture_binding(self, key, label, append=False):
+        if self.capture_process is not None:
+            return
+        if append and len(self.var(key, 'ini').get().split(',')) >= 4:
+            self.messagebox.showinfo('Bloodborne', _('Up to four bindings per action.', 'До четырёх назначений на действие.'))
+            return
+        tool = next((PORT_DIR / folder / 'bb-gpu-capabilities.exe' for folder in ('bin', 'out')
+                     if (PORT_DIR / folder / 'bb-gpu-capabilities.exe').is_file()), None)
+        if tool is None:
+            self.messagebox.showerror('Bloodborne', _('Input capture helper is missing. Reinstall the port package.',
+                                                      'Не найден модуль захвата ввода. Переустановите сборку порта.'))
+            return
+        kind = key.split('.')[0]
+        title = _('Assign: {} — press a key or button; close to cancel',
+                  'Назначение: {} — нажмите клавишу или кнопку; закрыть для отмены').format(label)
+        env = native_environment()
+        env['BB_GAMEPAD'] = self.var('gamepad', 'app').get()
+        try:
+            self.capture_process = subprocess.Popen([str(tool), '--read-input', kind, title],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, cwd=PORT_DIR, creationflags=NO_WINDOW)
+            if sys.platform == 'win32':
+                ctypes.windll.user32.AllowSetForegroundWindow(self.capture_process.pid)
+        except OSError as error:
+            self.messagebox.showerror('Bloodborne', str(error))
+            return
+        for button in self.binding_buttons:
+            button.state(['disabled'])
+        self.capture_after = self.root.after(30, lambda: self.poll_capture(key, append))
+
+    def poll_capture(self, key, append):
+        self.capture_after = None
+        process = self.capture_process
+        if process is None:
+            return
+        if process.poll() is None:
+            self.capture_after = self.root.after(30, lambda: self.poll_capture(key, append))
+            return
+        output, error = process.communicate()
+        self.capture_process = None
+        for button in self.binding_buttons:
+            button.state(['!disabled'])
+        if process.returncode:
+            self.messagebox.showerror('Bloodborne', error.decode('utf-8', errors='replace')[:400])
+            return
+        kind, separator, name = output.decode('utf-8', errors='replace').strip().partition(' ')
+        if separator and kind == key.split('.')[0] and name and ',' not in name and '\n' not in name:
+            value = self.var(key, 'ini')
+            bindings = [part.strip() for part in value.get().split(',') if part.strip()] if append else []
+            if name.casefold() not in [part.casefold() for part in bindings]:
+                bindings.append(name)
+            value.set(', '.join(bindings[:4]))
+            self.collect()
+
+    def cancel_capture(self):
+        if self.capture_after is not None:
+            self.root.after_cancel(self.capture_after)
+            self.capture_after = None
+        if self.capture_process is not None:
+            if self.capture_process.poll() is None:
+                self.capture_process.terminate()
+            self.capture_process.communicate(timeout=5)
+            self.capture_process = None
+        for button in self.binding_buttons:
+            button.state(['!disabled'])
 
     def refresh_gamepads(self):
         tool = next((PORT_DIR / folder / 'bb-gpu-capabilities.exe' for folder in ('bin', 'out')
@@ -1243,6 +1332,7 @@ class Launcher:
 
     # ---- game process ------------------------------------------------------------------------
     def play(self):
+        self.cancel_capture()
         if self.process:
             return
         self.collect()
@@ -1355,7 +1445,7 @@ class Launcher:
                 self.offer_update(version, url, page)
             elif manual:
                 self.messagebox.showinfo('Bloodborne', _('You have the latest version ({}).',
-                                                         'У вас последняя версия ({}).').format(VERSION))
+                                                         'У вас последняя версия ({}).').format(f'v{VERSION}'))
         self.ui_calls.put(show)
 
     def offer_update(self, version, url, page):
@@ -1461,6 +1551,7 @@ class Launcher:
             self.messagebox.showerror('Bloodborne', result.stderr.decode(errors='replace')[:400])
 
     def close(self):
+        self.cancel_capture()
         try:
             self.collect()
         except Exception:  # never keep the window open over a settings problem
@@ -1510,7 +1601,8 @@ def play_without_window(settings):
 
 
 def version_tuple(text):
-    return tuple(int(number) for number in re.findall(r'\d+', text or ''))
+    parts = tuple(int(number) for number in re.findall(r'\d+', text or ''))
+    return parts + (0,) * max(0, 4 - len(parts))
 
 
 def latest_release():
@@ -1555,6 +1647,10 @@ def install_update(target, wait_pid):
 def main():
     global LANG
     args = sys.argv[1:]
+    if args == ['--version']:
+        attach_stdio()
+        print(f'v{VERSION}')
+        return
     if args and args[0] in ('--run', '--script'):
         sys.exit(run_role(args))
     settings = {**APP_DEFAULTS, **load_json(CONFIG_FILE, {})}

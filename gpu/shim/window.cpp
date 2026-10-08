@@ -8,6 +8,7 @@
 #include "bbport_overlay.h"
 #include "bbport_mouse.h"
 #include "bbport_settings.h"
+#include "../../src/host_input.h"
 
 namespace Frontend {
 
@@ -152,6 +153,15 @@ bool WindowSDL::PollEvents() {
             !BbOverlay::CapturesInput()) {
             BbMouse::Motion(event.motion.xrel, event.motion.yrel);
         }
+        if (event.type == SDL_EVENT_MOUSE_WHEEL && !text_active && !BbOverlay::CapturesInput()) {
+            const float sign = event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -1.f : 1.f;
+            const float x = event.wheel.x * sign, y = event.wheel.y * sign;
+            const auto until = SDL_GetTicks() + 80; // one short press, visible to guest pad sampling
+            if (y > 0) wheel_until[0] = until;
+            if (y < 0) wheel_until[1] = until;
+            if (x < 0) wheel_until[2] = until;
+            if (x > 0) wheel_until[3] = until;
+        }
         switch (event.type) {
         case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
         case SDL_EVENT_WINDOW_RESIZED: {
@@ -170,8 +180,23 @@ bool WindowSDL::PollEvents() {
         }
     }
     UpdateMouseCapture();
+    UpdateMouseButtons();
     UpdateCursor();
     return is_open;
+}
+
+void WindowSDL::UpdateMouseButtons() {
+    u32 buttons = 0;
+    if (!text_active && !BbOverlay::CapturesInput() &&
+        (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS)) {
+        // SDL mouse APIs belong to the window thread; guest threads read only this snapshot.
+        buttons = SDL_GetMouseState(nullptr, nullptr);
+        const auto now = SDL_GetTicks();
+        for (unsigned i = 0; i < 4; ++i) if (now < wheel_until[i]) buttons |= BB_WHEEL_UP << i;
+    } else {
+        for (auto& until : wheel_until) until = 0;
+    }
+    mouse_buttons.store(buttons, std::memory_order_relaxed);
 }
 
 void WindowSDL::UpdateMouseCapture() {

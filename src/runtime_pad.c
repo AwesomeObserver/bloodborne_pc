@@ -15,6 +15,7 @@
 #include <pthread.h>
 #include <time.h>
 #include <SDL3/SDL.h>
+#include "host_input.h"
 #include <sys/stat.h>
 
 #define ERR_INVALID_ARG ((int32_t)0x80920001)
@@ -161,7 +162,12 @@ static const uint32_t input_buttons[IN_COUNT]={
 };
 #define MAX_BIND 4
 enum { PAD_LEFT_TRIGGER=SDL_GAMEPAD_BUTTON_COUNT, PAD_RIGHT_TRIGGER }; /* triggers as buttons */
-typedef struct { int key_count, pad_count; SDL_Scancode keys[MAX_BIND]; int pad[MAX_BIND]; } Binding;
+typedef struct {
+    int key_count, mouse_count, pad_count;
+    SDL_Scancode keys[MAX_BIND];
+    Uint32 mouse[MAX_BIND];
+    int pad[MAX_BIND];
+} Binding;
 static Binding bindings[IN_COUNT];
 static int bindings_ready;
 
@@ -218,15 +224,19 @@ static void load_bindings(void) {
         for (int i=0;i<IN_COUNT;++i) if (!strcmp(line+4,input_names[i])) input=i;
         if (input<0 || (pad && input>=IN_MOVE_UP)) { printf("Runtime: controls: unknown input %s\n",line); continue; }
         Binding *b=&bindings[input];
-        if (keyboard) b->key_count=0; else b->pad_count=0;
+        if (keyboard) b->key_count=b->mouse_count=0; else b->pad_count=0;
         for (char *name=strtok(eq+1,",\r\n"); name; name=strtok(NULL,",\r\n")) {
             while (*name==' ') ++name;
             for (char *end=name+strlen(name); end>name && end[-1]==' ';) *--end=0;
             if (!*name) continue;
             if (keyboard) {
-                const SDL_Scancode s=SDL_GetScancodeFromName(name);
-                if (s==SDL_SCANCODE_UNKNOWN) printf("Runtime: controls: unknown key \"%s\" for %s\n",name,line+4);
-                else if (b->key_count<MAX_BIND) b->keys[b->key_count++]=s;
+                const Uint32 mouse=bb_mouse_binding(name);
+                const SDL_Scancode s=mouse ? SDL_SCANCODE_UNKNOWN : bb_key_binding(name);
+                if (!mouse && s==SDL_SCANCODE_UNKNOWN) printf("Runtime: controls: unknown key \"%s\" for %s\n",name,line+4);
+                else if (b->key_count+b->mouse_count<MAX_BIND) {
+                    if (mouse) b->mouse[b->mouse_count++]=mouse;
+                    else b->keys[b->key_count++]=s;
+                }
             } else {
                 const int button=pad_button_from_name(name);
                 if (button<0) printf("Runtime: controls: unknown gamepad button \"%s\" for %s\n",name,line+4);
@@ -236,8 +246,9 @@ static void load_bindings(void) {
     }
     fclose(f);
 }
-static int key_down(const bool *k, int input) {
-    for (int i=0;i<bindings[input].key_count;++i) if (k[bindings[input].keys[i]]) return 1;
+static int key_down(const bool *k, Uint32 mouse, int input) {
+    for (int i=0;k && i<bindings[input].key_count;++i) if (k[bindings[input].keys[i]]) return 1;
+    for (int i=0;i<bindings[input].mouse_count;++i) if (mouse & bindings[input].mouse[i]) return 1;
     return 0;
 }
 /* The bound gamepad buttons' state; triggers as their analog value. */
@@ -257,17 +268,17 @@ static int pad_value(SDL_Gamepad *g, int input) {
 static uint8_t key_axis(uint8_t value, int negative, int positive) {
     return negative || positive ? (uint8_t)(128-(negative ? 128 : 0)+(positive ? 127 : 0)) : value;
 }
-static void apply_keyboard(PadData *d, const bool *k) {
+static void apply_keyboard(PadData *d, const bool *k, Uint32 mouse) {
     for (int i=IN_CROSS;i<=IN_RIGHT;++i)
-        if (i!=IN_TOUCHPAD && i!=IN_TOUCHPAD_RIGHT && key_down(k,i)) d->buttons|=input_buttons[i];
-    if (key_down(k,IN_TOUCHPAD)) touch_click(d,0);
-    if (key_down(k,IN_TOUCHPAD_RIGHT)) touch_click(d,1);
-    if (key_down(k,IN_L2)) d->l2=255;
-    if (key_down(k,IN_R2)) d->r2=255;
-    d->left_x=key_axis(d->left_x,key_down(k,IN_MOVE_LEFT),key_down(k,IN_MOVE_RIGHT));
-    d->left_y=key_axis(d->left_y,key_down(k,IN_MOVE_UP),key_down(k,IN_MOVE_DOWN));
-    d->right_x=key_axis(d->right_x,key_down(k,IN_LOOK_LEFT),key_down(k,IN_LOOK_RIGHT));
-    d->right_y=key_axis(d->right_y,key_down(k,IN_LOOK_UP),key_down(k,IN_LOOK_DOWN));
+        if (i!=IN_TOUCHPAD && i!=IN_TOUCHPAD_RIGHT && key_down(k,mouse,i)) d->buttons|=input_buttons[i];
+    if (key_down(k,mouse,IN_TOUCHPAD)) touch_click(d,0);
+    if (key_down(k,mouse,IN_TOUCHPAD_RIGHT)) touch_click(d,1);
+    if (key_down(k,mouse,IN_L2)) d->l2=255;
+    if (key_down(k,mouse,IN_R2)) d->r2=255;
+    d->left_x=key_axis(d->left_x,key_down(k,mouse,IN_MOVE_LEFT),key_down(k,mouse,IN_MOVE_RIGHT));
+    d->left_y=key_axis(d->left_y,key_down(k,mouse,IN_MOVE_UP),key_down(k,mouse,IN_MOVE_DOWN));
+    d->right_x=key_axis(d->right_x,key_down(k,mouse,IN_LOOK_LEFT),key_down(k,mouse,IN_LOOK_RIGHT));
+    d->right_y=key_axis(d->right_y,key_down(k,mouse,IN_LOOK_UP),key_down(k,mouse,IN_LOOK_DOWN));
 }
 
 static void sample_host(PadData *d) {
@@ -307,7 +318,7 @@ static void sample_host(PadData *d) {
         if ((d->buttons & BTN_TOUCHPAD) && !d->touch_count) touch_click(d,0);
         if (touch_right) touch_click(d,1);
     }
-    if (k) apply_keyboard(d,k);
+    apply_keyboard(d,k,bbgpu_mouse_buttons());
 }
 
 /* BB_PAD_FILE=<file>: scripted input for automated runs. The file holds whitespace-separated

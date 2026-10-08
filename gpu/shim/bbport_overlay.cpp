@@ -14,6 +14,7 @@
 #include <SDL3/SDL.h>
 #include "bbport_settings.h"
 #include "bbport_mouse.h"
+#include "../bbgpu.h"
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -221,6 +222,7 @@ void Menu() {
         ImGui::End();
         return;
     }
+    ImGui::TextDisabled("bbport %s", bbgpu_version());
     // Resizing the game window or dragging the menu must leave every control reachable.
     const ImVec2 at = ImGui::GetWindowPos(), actual_size = ImGui::GetWindowSize();
     const ImVec2 bounded(

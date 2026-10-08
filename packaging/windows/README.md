@@ -1,4 +1,4 @@
-# bbport on Windows
+# bbport v2 on Windows
 
 The port builds and runs natively on 64-bit Windows 10 (1903+) / 11 with the same sources as
 on Linux. Players: see `README-Windows.txt` (it ships in the package).
@@ -64,6 +64,10 @@ are in `launcher/bbport_lang.py` (one list per language in the order of `KEYS`; 
 empty text falls back to English). The icon (`launcher/bloodborne.ico`/`.png`) is drawn by
 `packaging/windows/make_icon.py` and built into `Bloodborne.exe`, `bb-probe.exe` (the game
 window) and `bb-gpu-capabilities.exe`.
+
+`VERSION.txt` is the port version shared by the launcher, runtime log, native Windows
+resources and PyInstaller metadata (`version_info.py`). Release v2 uses numeric file
+version `2.0.0.0`; game, upstream and third-party library versions keep their own meanings.
 
 ## What is different from Linux
 

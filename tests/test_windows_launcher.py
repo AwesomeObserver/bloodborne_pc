@@ -14,6 +14,11 @@ spec.loader.exec_module(launcher)
 
 
 class WindowsLauncherTests(unittest.TestCase):
+    def test_version_comparison(self):
+        self.assertEqual(launcher.VERSION, (ROOT / 'VERSION.txt').read_text().strip())
+        self.assertEqual(launcher.version_tuple('windows-v2'), launcher.version_tuple('2.0.0'))
+        self.assertLess(launcher.version_tuple('1.5'), launcher.version_tuple(launcher.VERSION))
+        self.assertGreater(launcher.version_tuple('2.1'), launcher.version_tuple(launcher.VERSION))
     def test_mouse_settings_normalize_bad_manual_values(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'bbport.ini'
@@ -57,6 +62,8 @@ class WindowsLauncherTests(unittest.TestCase):
                     app = launcher.Launcher(root, tk, ttk, filedialog, messagebox)
                     app.show('controls')
                     root.update_idletasks()
+                    self.assertEqual(root.title(), 'Bloodborne — bbport v2')
+                    self.assertEqual(app.binding_buttons[0].winfo_class(), 'TButton')
                     app.gamepad_box.current(1)
                     app.gamepad_box.event_generate('<<ComboboxSelected>>')
                     self.assertEqual(app.var('gamepad', 'app').get(), 'guid-one')
@@ -72,6 +79,58 @@ class WindowsLauncherTests(unittest.TestCase):
                         self.assertIn(setting, saved)
                     app.refresh_gamepads()
                     self.assertEqual(app.gamepad_box.current(), 1)
+                    # Drive the actual capture buttons and completion/cancel paths without
+                    # opening an external window in the Tk unit test.
+                    (data / 'bin').mkdir()
+                    (data / 'bin/bb-gpu-capabilities.exe').touch()
+                    class Capture:
+                        def __init__(self, output=b'', code=0):
+                            self.output, self.code = output, code
+                            self.returncode = None
+                            self.pid = 0
+                        def poll(self):
+                            return self.returncode
+                        def communicate(self, timeout=None):
+                            return self.output, b'capture error' if self.returncode else b''
+                        def terminate(self):
+                            self.returncode = -1
+                    def finish(process, key='key.cross', append=False):
+                        root.after_cancel(app.capture_after)
+                        process.returncode = process.code
+                        app.poll_capture(key, append)
+                    with patch.object(launcher, 'PORT_DIR', data), \
+                         patch.object(launcher.subprocess, 'Popen') as start, \
+                         patch.object(messagebox, 'showinfo') as info, \
+                         patch.object(messagebox, 'showerror') as error:
+                        captured = Capture(b'key Mouse Right\n'); start.return_value = captured
+                        app.binding_buttons[0].invoke()
+                        self.assertTrue(app.binding_buttons[0].instate(['disabled']))
+                        self.assertIn('--read-input', start.call_args.args[0])
+                        self.assertEqual(start.call_args.kwargs['env']['BB_GAMEPAD'], 'guid-one')
+                        finish(captured)
+                        self.assertEqual(app.var('key.cross', 'ini').get(), 'Mouse Right')
+                        self.assertIn('key.cross=Mouse Right\n', (data / 'bbport.ini').read_text())
+                        for expected in ('Mouse Right, Comma', 'Mouse Right, Comma'):
+                            captured=Capture(b'key Comma\n'); start.return_value=captured
+                            app.binding_buttons[1].invoke(); finish(captured, append=True)
+                            self.assertEqual(app.var('key.cross', 'ini').get(), expected)
+                        captured=Capture(); start.return_value=captured
+                        app.binding_buttons[0].invoke(); finish(captured)
+                        self.assertEqual(app.var('key.cross', 'ini').get(), 'Mouse Right, Comma')
+                        captured=Capture(b'key Escape\n'); start.return_value=captured
+                        app.binding_buttons[0].invoke(); app.cancel_capture()
+                        self.assertIsNone(app.capture_process)
+                        self.assertIsNone(app.capture_after)
+                        self.assertEqual(app.var('key.cross', 'ini').get(), 'Mouse Right, Comma')
+                        captured=Capture(code=1); start.return_value=captured
+                        app.binding_buttons[0].invoke(); finish(captured)
+                        error.assert_called_once()
+                        self.assertEqual(app.var('key.cross', 'ini').get(), 'Mouse Right, Comma')
+                        app.var('key.cross', 'ini').set('Q, W, E, R')
+                        start.reset_mock(); app.binding_buttons[1].invoke()
+                        start.assert_not_called(); info.assert_called_once()
+                        app.binding_buttons[2].invoke()
+                        self.assertEqual(app.var('key.cross', 'ini').get(), '')
                     app.reset_controls()
                     self.assertEqual(app.var('key.cross', 'ini').get(), 'Space')
                     self.assertFalse(app.var('mouse_camera', 'ini').get())

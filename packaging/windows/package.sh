@@ -29,7 +29,9 @@ for module in argparse base64 collections hashlib json re shutil struct tempfile
               urllib.request ctypes.wintypes; do
     hidden+=(--hidden-import "$module")
 done
+out/pyenv/Scripts/python.exe packaging/windows/version_info.py out/launcher-version.txt
 out/pyenv/Scripts/python.exe -m PyInstaller --noconfirm --clean --log-level WARN --windowed \
+    --version-file "$(cygpath -w "$PWD/out/launcher-version.txt")" --add-data "$(cygpath -w "$PWD/VERSION.txt"):." \
     --name Bloodborne --icon "$(cygpath -w "$PWD/launcher/bloodborne.ico")" --distpath out/pyi-dist \
     --workpath out/pyi-work --specpath out/pyi-work --paths "$(cygpath -w "$PWD/scripts")" "${hidden[@]}" \
     "$(cygpath -w "$PWD/launcher/bbport_launcher_win.py")"
@@ -52,7 +54,7 @@ ldd "$dest/bin/bb-probe.exe" "$dest/bin/bb-gpu-capabilities.exe" |
         cp -u "$dll" "$dest/bin/"
     done
 cp -r scripts patches "$dest/"
-cp run.py LICENSE README.md packaging/windows/README-Windows.txt "$dest/"
+cp run.py LICENSE VERSION.txt README.md packaging/windows/README-Windows.txt "$dest/"
 mkdir -p "$dest/licenses"
 cp gpu/third_party/fsr-vulkan/LICENSE.txt "$dest/licenses/FSR-Vulkan-LICENSE.txt"
 cp gpu/third_party/fsr-vulkan/upstream/ffx-1.1.4/sdk/LICENSE.txt "$dest/licenses/FidelityFX-SDK-LICENSE.txt"

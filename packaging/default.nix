@@ -85,7 +85,7 @@ let
 in
 pkgs.stdenv.mkDerivation {
   pname = "bbport";
-  version = "0.1";
+  version = builtins.replaceStrings [ "\n" ] [ "" ] (builtins.readFile ../VERSION.txt);
   inherit src;
   nativeBuildInputs = [ pkgs.makeShellWrapper pkgs.wrapGAppsHook4 pkgs.gobject-introspection ];
   buildInputs = [ pkgs.gtk4 pkgs.libadwaita pkgs.adwaita-icon-theme pkgs.librsvg ]

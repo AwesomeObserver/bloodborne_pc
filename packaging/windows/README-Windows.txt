@@ -1,5 +1,5 @@
-Bloodborne (bbport) for Windows
-===============================
+Bloodborne (bbport) v2 for Windows
+================================
 
 No game files are included. You need your own decrypted dump of Bloodborne CUSA03173
 (the folder with eboot.bin, sce_module, sce_sys, dvdroot_ps4), updated to version 1.09.
@@ -33,7 +33,9 @@ Starting
   saved when the menu closes. Effects, model detail and motion vector patches require
   "Apply and restart game". Resolution and quality also require a restart when live
   resolution changes are disabled. The reactive mask applies to FSR, not DLSS or TAA.
-- Controls: select a controller and remap keys/buttons. Backspace opens the right touchpad.
+- Controls: click a binding and press a key, mouse button/wheel or controller button/trigger.
+  + adds an alternative (up to four per action); Clear removes bindings. Close the capture
+  window to cancel. Escape and Comma can be assigned too. Backspace opens the right touchpad.
 - Mouse camera: F4 toggles direct camera control. Controls in the launcher and the game menu
   offer sensitivity and invert Y. Menus, name entry and Alt+Tab release the cursor. Lock-on
   retains the game's camera. Requires the matching 1.09 camera code; conflicting patches

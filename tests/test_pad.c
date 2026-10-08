@@ -5,7 +5,9 @@
 #include "../src/runtime_pad.c"
 
 static int capture;
+static Uint32 mouse_buttons;
 int bbgpu_overlay_captures_input(void) { return capture; }
+uint32_t bbgpu_mouse_buttons(void) { return mouse_buttons; }
 uintptr_t runtime_lookup(const RuntimeExport *table, size_t count, const char *name) {
     (void)table; (void)count; (void)name;
     return 0;
@@ -98,6 +100,38 @@ int main(void) {
     assert(data.buttons==(BTN_CROSS|BTN_R2|BTN_R1) && data.r2==255);
     assert(bindings[IN_CROSS].key_count==2 && bindings[IN_CROSS].keys[0]==SDL_SCANCODE_X &&
            bindings[IN_CROSS].keys[1]==SDL_SCANCODE_SPACE);
+    /* Capture-helper names round-trip through the actual INI parser and pad ABI. */
+    FILE *mouse_config=fopen(config,"w");
+    assert(mouse_config);
+    fputs("key.cross=Space, Mouse Left\nkey.r1=Mouse X1\nkey.r2=Mouse Right\n"
+          "key.square=Mouse Middle\nkey.circle=Mouse X2\nkey.up=Mouse Wheel Up\n"
+          "key.down=Mouse Wheel Down\nkey.left=Mouse Wheel Left\nkey.right=Mouse Wheel Right\n"
+          "key.triangle=Comma\nkey.move_up=Mouse Left\n",mouse_config);
+    fclose(mouse_config);
+    load_bindings();
+    assert(bindings[IN_CROSS].key_count==1 && bindings[IN_CROSS].mouse_count==1);
+    bool keyboard[SDL_SCANCODE_COUNT]={0};
+    PadData mapped={.left_x=128,.left_y=128,.right_x=128,.right_y=128};
+    apply_keyboard(&mapped,keyboard,SDL_BUTTON_LMASK|SDL_BUTTON_MMASK|SDL_BUTTON_RMASK|
+                   SDL_BUTTON_X1MASK|SDL_BUTTON_X2MASK|BB_WHEEL_UP|BB_WHEEL_RIGHT);
+    assert(mapped.buttons==(BTN_CROSS|BTN_SQUARE|BTN_CIRCLE|BTN_R1|BTN_R2|BTN_UP|BTN_RIGHT));
+    assert(mapped.r2==255 && mapped.left_y==0);
+    keyboard[SDL_SCANCODE_COMMA]=true;
+    mapped=(PadData){0};
+    apply_keyboard(&mapped,keyboard,0);
+    assert(mapped.buttons==BTN_TRIANGLE);
+    keyboard[SDL_SCANCODE_COMMA]=false;
+    mapped=(PadData){0};
+    apply_keyboard(&mapped,keyboard,BB_WHEEL_DOWN|BB_WHEEL_LEFT);
+    assert(mapped.buttons==(BTN_DOWN|BTN_LEFT));
+    mapped=(PadData){0};
+    apply_keyboard(&mapped,keyboard,0);
+    assert(mapped.buttons==0);
+    mouse_buttons=SDL_BUTTON_RMASK;
+    capture=1;
+    assert(pad_read_state(1,&data)==0 && data.buttons==0 && data.r2==0);
+    capture=0;
+    mouse_buttons=0;
     SDL_CloseJoystick(joystick);
     if (gamepad) SDL_CloseGamepad(gamepad);
     gamepad=NULL;

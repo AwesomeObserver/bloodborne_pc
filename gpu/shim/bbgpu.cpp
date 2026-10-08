@@ -272,7 +272,7 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
     if (config->user_dir) setenv("BB_GPU_USER_DIR", config->user_dir, 0);
 #endif
     Core::Emulator::FillElfInfo(*config);
-    const std::string title = config->title ? config->title : "Bloodborne";
+    const std::string title = std::string(config->title ? config->title : "Bloodborne") + " — bbport " + bbgpu_version();
     const s32 width = config->width, height = config->height;
     g_window_thread = std::thread([title, width, height] {
         Common::SetCurrentThreadName("bb:window");
@@ -397,6 +397,10 @@ ScreenshotRequests ConsumeScreenshotRequests() { return {}; }
 
 extern "C" int bbgpu_overlay_captures_input(void) {
     return BbOverlay::CapturesInput() ? 1 : 0;
+}
+
+extern "C" uint32_t bbgpu_mouse_buttons(void) {
+    return g_window ? g_window->GetMouseButtons() : 0;
 }
 
 extern "C" int bbgpu_text_input_begin(const char* initial, const char* prompt) {

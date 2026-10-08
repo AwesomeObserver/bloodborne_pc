@@ -446,6 +446,8 @@ int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
 #ifdef _WIN32
     crash_win_init();
+    if (argc == 2 && !strcmp(argv[1], "--version")) { puts(bbgpu_version()); return 0; }
+    printf("Bloodborne port %s\n", bbgpu_version());
 #endif
 #ifndef _WIN32
     /* Keep host heap objects handed to the guest (thread handles, TLS) in the

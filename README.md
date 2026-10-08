@@ -1,4 +1,4 @@
-# Bloodborne for Windows
+# Bloodborne for Windows v2
 
 **Bloodborne running natively on Windows 10 and 11.**
 
@@ -25,7 +25,8 @@ Updated to upstream **0.4** (`daa7165`); see the [migration and validation repor
 - **NVIDIA DLSS**, available when the runtime reports support, with a
   [model preset selector](docs/dlss-frame-generation-windows.md#dlss-model-presets).
 - **AMD FSR 3.1, FSR 4 and FSR 4.1.1/FP8** upscaling (matching GPU features and assets required), plus native-resolution TAA.
-- **Remappable keyboard and controller**, controller selection and working touchpad gestures.
+- **Press-to-bind keyboard, mouse and controller**, up to four alternatives per action,
+  controller selection and working touchpad gestures.
 - **Unlocked frame rate** with a frame cap (up to 120 by default), or 30/60/90 FPS.
 - **Output resolutions** from 720p to 4K, presets from Native AA to Ultra Performance.
 - **Cheats page:** never die, stealth, silent footsteps, Rally that never fades, enemy control,
@@ -60,6 +61,9 @@ In the game, **Insert** (or **L3+R3** on a controller) opens the settings menu.
 **F4** toggles direct mouse camera control. Enable it and adjust sensitivity/invert Y on
 **Controls** in the launcher or in the game menu. Opening a menu or switching windows
 releases capture; lock-on retains the game's camera. See [mouse camera](docs/mouse-camera-windows.md).
+On **Controls**, click an existing binding and press the desired key, mouse button/wheel
+or controller button/trigger. **+** adds an alternative (up to four); **Clear** removes the
+binding. Close the capture window to cancel. Changes apply at the next game start.
 Use the mouse and wheel to edit and scroll through the menu; Ctrl+click a slider to enter
 an exact value. Settings are saved when the menu closes. Effects, model detail and motion
 vector patches require **Apply and restart game**. With live resolution changes disabled,
