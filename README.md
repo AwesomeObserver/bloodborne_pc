@@ -57,6 +57,11 @@ Nothing else to install: everything the game needs is in the zip.
 4. Press **PLAY**.
 
 In the game, **Insert** (or **L3+R3** on a controller) opens the settings menu.
+Use the mouse and wheel to edit and scroll through the menu; Ctrl+click a slider to enter
+an exact value. Settings are saved when the menu closes. Effects, model detail and motion
+vector patches require **Apply and restart game**. With live resolution changes disabled,
+resolution and quality changes also require a restart. Reactive mask controls apply to FSR;
+they are disabled for DLSS and TAA.
 Keyboard: WASD move, arrows camera, Space Cross, Left Shift Circle, E Square, Q Triangle,
 1/3 L1/R1, R/F L2/R2, Z/C L3/R3, I/K/J/L d-pad, Enter Options, Tab touchpad.
 

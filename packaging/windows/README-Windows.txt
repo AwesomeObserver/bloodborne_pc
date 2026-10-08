@@ -29,6 +29,10 @@ Starting
 - In the game, Insert (or L3+R3 on a gamepad) opens the port's menu (upscaler, resolution,
   effects). Keyboard: WASD move, arrows camera, Space Cross, Left Shift Circle, E Square,
   Q Triangle, 1/3 L1/R1, R/F L2/R2, Z/C L3/R3, I/K/J/L d-pad, Enter Options, Tab touchpad.
+- Menu: use the mouse and wheel; Ctrl+click a slider to enter an exact value. Settings are
+  saved when the menu closes. Effects, model detail and motion vector patches require
+  "Apply and restart game". Resolution and quality also require a restart when live
+  resolution changes are disabled. The reactive mask applies to FSR, not DLSS or TAA.
 - Controls: select a controller and remap keys/buttons. Backspace opens the right touchpad.
 
 Data

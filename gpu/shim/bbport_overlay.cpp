@@ -69,6 +69,12 @@ void SetOpen(bool value) {
     if (menu_open.exchange(value) == value) {
         return;
     }
+    // Releases may arrive while the menu is closed. Drop old presses/queued events so
+    // reopening the menu never inherits a held mouse button, modifier or gamepad key.
+    ImGuiIO& io = ImGui::GetIO();
+    io.ClearEventsQueue();
+    io.ClearInputKeys();
+    io.ClearInputMouse();
     // The system cursor shows over the menu (window.cpp); ImGui learns where it is now, not at
     // the next motion: mouse motion is not passed on while the menu is closed.
     if (value) {
@@ -86,6 +92,12 @@ void SetOpen(bool value) {
 }
 
 ImGuiKey KeyFromSdl(SDL_Keycode key) {
+    if (key >= SDLK_A && key <= SDLK_Z) {
+        return ImGuiKey(ImGuiKey_A + key - SDLK_A);
+    }
+    if (key >= SDLK_0 && key <= SDLK_9) {
+        return ImGuiKey(ImGuiKey_0 + key - SDLK_0);
+    }
     switch (key) {
     case SDLK_TAB: return ImGuiKey_Tab;
     case SDLK_LEFT: return ImGuiKey_LeftArrow;
@@ -147,12 +159,16 @@ void Store(std::atomic<T>& target, T value, bool changed) {
 
 void Checkbox(const char* label, std::atomic<bool>& value) {
     bool v = value;
-    Store(value, v, ImGui::Checkbox(label, &v));
+    // Evaluate the widget first: argument evaluation order could otherwise read v
+    // before ImGui edits it, storing the old value again (Clang on Windows does).
+    const bool changed = ImGui::Checkbox(label, &v);
+    Store(value, v, changed);
 }
 
 void Slider(const char* label, std::atomic<float>& value, float lo, float hi) {
     float v = value;
-    Store(value, v, ImGui::SliderFloat(label, &v, lo, hi, "%.2f"));
+    const bool changed = ImGui::SliderFloat(label, &v, lo, hi, "%.2f");
+    Store(value, v, changed);
 }
 
 void Hint(const char* text) {
@@ -169,17 +185,26 @@ void Hint(const char* text) {
 void Menu() {
     auto& s = BbSettings::Get();
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const float pad = 12.0f * base_scale;
+    const ImVec2 limit(std::max(viewport->WorkSize.x - 2 * pad, 1.0f),
+                       std::max(viewport->WorkSize.y - 2 * pad, 1.0f));
+    const ImVec2 size(std::min(620.0f * base_scale, limit.x),
+                      std::min(820.0f * base_scale, limit.y));
     // Where it was moved last (bbport.ini menu_pos, a fraction of the screen), kept on screen.
     ImVec2 pos(viewport->WorkPos.x + 40.0f * base_scale, viewport->WorkPos.y + 40.0f * base_scale);
     if (s.menu_x >= 0.0f && s.menu_y >= 0.0f) {
-        const float margin = 80.0f * base_scale;
-        pos.x = viewport->WorkPos.x +
-                std::clamp(s.menu_x * viewport->WorkSize.x, 0.0f, std::max(viewport->WorkSize.x - margin, 0.0f));
-        pos.y = viewport->WorkPos.y +
-                std::clamp(s.menu_y * viewport->WorkSize.y, 0.0f, std::max(viewport->WorkSize.y - margin, 0.0f));
+        pos.x = viewport->WorkPos.x + s.menu_x * viewport->WorkSize.x;
+        pos.y = viewport->WorkPos.y + s.menu_y * viewport->WorkSize.y;
     }
+    pos.x = std::clamp(pos.x, viewport->WorkPos.x + pad,
+                       viewport->WorkPos.x + pad + limit.x - size.x);
+    pos.y = std::clamp(pos.y, viewport->WorkPos.y + pad,
+                       viewport->WorkPos.y + pad + limit.y - size.y);
     ImGui::SetNextWindowPos(pos, ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(ImVec2(620.0f * base_scale, 0.0f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(size, ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(std::min(360.0f * base_scale, limit.x), std::min(240.0f * base_scale, limit.y)),
+        limit);
     bool keep_open = true;
     if (!ImGui::Begin(
             BbSettings::MenuText("Bloodborne - Graphics  (Insert / L3+R3)###bbport_settings",
@@ -188,6 +213,14 @@ void Menu() {
         ImGui::End();
         return;
     }
+    // Resizing the game window or dragging the menu must leave every control reachable.
+    const ImVec2 at = ImGui::GetWindowPos(), actual_size = ImGui::GetWindowSize();
+    const ImVec2 bounded(
+        std::clamp(at.x, viewport->WorkPos.x + pad,
+                   viewport->WorkPos.x + pad + std::max(limit.x - actual_size.x, 0.0f)),
+        std::clamp(at.y, viewport->WorkPos.y + pad,
+                   viewport->WorkPos.y + pad + std::max(limit.y - actual_size.y, 0.0f)));
+    ImGui::SetWindowPos(bounded);
     // Moved: remembered (saved with the settings when the menu closes).
     if (!ImGui::IsWindowAppearing() && viewport->WorkSize.x > 0.0f && viewport->WorkSize.y > 0.0f) {
         const ImVec2 at = ImGui::GetWindowPos();
@@ -401,7 +434,10 @@ void Menu() {
     Checkbox(BbSettings::MenuText("Sharpening (RCAS)", "Резкость (RCAS)"), s.sharpen);
     ImGui::BeginDisabled(!s.sharpen);
     Slider(BbSettings::MenuText("Sharpness", "Сила резкости"), s.sharpness, 0.0f, 2.0f);
-    Hint(BbSettings::MenuText(
+    Hint(s.upscaler == BbSettings::UpscalerDlss ? BbSettings::MenuText(
+        "RCAS sharpening is applied after DLSS. Ctrl+click the slider to enter an exact value.",
+        "Резкость RCAS применяется после DLSS. Ctrl+клик по ползунку — ввести точное значение.")
+        : BbSettings::MenuText(
         "Up to 1: the upscaler's own sharpening (RCAS). Above 1 adds another RCAS pass. "
         "Ctrl+click the slider to enter an exact value.",
         "До 1 — резкость самого апскейлера (RCAS). Выше 1 добавляется ещё один проход RCAS. "
@@ -415,7 +451,13 @@ void Menu() {
         "кадров больше деталей. Без него получается только сглаживание по истории."));
 
     ImGui::SeparatorText(BbSettings::MenuText("Reactive mask", "Маска реактивности"));
-    ImGui::BeginDisabled(taa);
+    const bool dlss = s.upscaler == BbSettings::UpscalerDlss;
+    if (dlss) {
+        ImGui::TextWrapped("%s", BbSettings::MenuText(
+            "DLSS does not use this reactive mask. These controls apply to FSR.",
+            "DLSS не использует эту маску реактивности. Эти настройки применяются к FSR."));
+    }
+    ImGui::BeginDisabled(taa || dlss);
     Checkbox(BbSettings::MenuText("Enable mask", "Включить маску"), s.reactive);
     Hint(BbSettings::IsFsr4(s.upscaler)
              ? BbSettings::MenuText(
@@ -728,8 +770,9 @@ bool HandleEvent(const SDL_Event& event) {
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP: {
         const bool down = event.type == SDL_EVENT_KEY_DOWN;
-        if (down && !event.key.repeat &&
-            (event.key.key == SDLK_INSERT || (is_open && event.key.key == SDLK_ESCAPE))) {
+        const bool close_on_escape = is_open && event.key.key == SDLK_ESCAPE &&
+            !io.WantTextInput && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
+        if (down && !event.key.repeat && (event.key.key == SDLK_INSERT || close_on_escape)) {
             SetOpen(event.key.key == SDLK_INSERT ? !is_open : false);
             return true;
         }
@@ -792,6 +835,8 @@ bool HandleEvent(const SDL_Event& event) {
                            : event.button.button == SDL_BUTTON_MIDDLE ? 2
                                                                       : -1;
         if (button >= 0) {
+            const float density = PixelDensity(event.button.windowID);
+            io.AddMousePosEvent(event.button.x * density, event.button.y * density);
             io.AddMouseButtonEvent(button, event.type == SDL_EVENT_MOUSE_BUTTON_DOWN);
         }
         return true;
@@ -800,8 +845,18 @@ bool HandleEvent(const SDL_Event& event) {
         if (!is_open) {
             return false;
         }
-        io.AddMouseWheelEvent(event.wheel.x, event.wheel.y);
+        io.AddMouseWheelEvent(event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -event.wheel.x
+                                                                            : event.wheel.x,
+                             event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -event.wheel.y
+                                                                            : event.wheel.y);
         return true;
+    case SDL_EVENT_WINDOW_FOCUS_GAINED:
+    case SDL_EVENT_WINDOW_FOCUS_LOST:
+        io.AddFocusEvent(event.type == SDL_EVENT_WINDOW_FOCUS_GAINED);
+        if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
+            l3_down = r3_down = false;
+        }
+        return false; // window lifecycle events still belong to the window
     default:
         return false;
     }

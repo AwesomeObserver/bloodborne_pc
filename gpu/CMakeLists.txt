@@ -244,6 +244,15 @@ add_executable(settings-test EXCLUDE_FROM_ALL ../tests/test_settings.cpp shim/bb
 target_compile_options(settings-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 target_include_directories(settings-test PRIVATE .. shim)
 
+add_executable(overlay-test EXCLUDE_FROM_ALL ../tests/test_overlay.cpp ../tests/test_gpu_runtime_stubs.cpp
+    third_party/imgui/imgui.cpp third_party/imgui/imgui_draw.cpp
+    third_party/imgui/imgui_tables.cpp third_party/imgui/imgui_widgets.cpp)
+target_include_directories(overlay-test PRIVATE shim shadps4 third_party/gcn/include
+    third_party/imgui third_party/imgui/backends)
+target_compile_definitions(overlay-test PRIVATE NDEBUG IMGUI_IMPL_VULKAN_NO_PROTOTYPES IMGUI_ENABLE_TEST_ENGINE
+    BB_FONT_PATH="${CMAKE_CURRENT_SOURCE_DIR}/third_party/fonts/DejaVuSans.ttf")
+target_link_libraries(overlay-test PRIVATE bbgpu)
+
 add_executable(scene-resolution-test EXCLUDE_FROM_ALL ../tests/test_scene_resolution.cpp ../tests/test_gpu_runtime_stubs.cpp)
 target_include_directories(scene-resolution-test PRIVATE shim shadps4 third_party/gcn/include)
 # The test's Vulkan-Hpp inline methods have a different set of platform extensions
@@ -310,7 +319,7 @@ if(WIN32)
 endif()
 add_test(NAME dlss-test COMMAND dlss-test)
 set_tests_properties(dlss-test PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
-set(BB_TEST_TARGETS motion-history-test motion-shader-test ui-composition-test settings-test
+set(BB_TEST_TARGETS motion-history-test motion-shader-test ui-composition-test settings-test overlay-test
     scene-resolution-test taa-shader-test camera-motion-test upscaler-support-test command-dispatch-test)
 if (WIN32)
     # Exercise the actual Windows HLE and SysV guest ABI, including virtual SDL input.
@@ -331,7 +340,7 @@ if (WIN32)
     add_executable(content-test EXCLUDE_FROM_ALL ../tests/test_content.c ../src/runtime_content.c)
     target_include_directories(content-test PRIVATE ../src)
     target_compile_options(content-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
-    foreach(test IN ITEMS motion-shader-test scene-resolution-test taa-shader-test camera-motion-test command-dispatch-test)
+    foreach(test IN ITEMS motion-shader-test scene-resolution-test taa-shader-test camera-motion-test command-dispatch-test overlay-test)
         target_sources(${test} PRIVATE ../src/compat_win.c)
         target_link_libraries(${test} PRIVATE bcrypt onecore ws2_32 -pthread)
     endforeach()
