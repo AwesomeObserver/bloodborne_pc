@@ -38,7 +38,7 @@ Python installation is needed.
 | **DLSS & FSR upscaling** | DLSS Super Resolution / DLAA, FSR 3.1, FSR 4, FSR 4.1.1/FP8 and native TAA. **720p–4K**, Native AA through Ultra Performance. |
 | **DLSS model presets** | Auto, **A–F, J, K, M, L**. CNN/transformer selection follows the preset automatically, independently of render scale. |
 | **Frame generation** | **DLSS FG ×2** or **FSR 3.1 FG ×2**, independent of upscaling. FSR FG also works with DLSS or native TAA. |
-| **Raw mouse camera** | Windows Raw Input, direct camera angles, equal-axis sensitivity, invert Y and automatic controller handoff. No added acceleration or virtual stick conversion. |
+| **Raw mouse camera** | Windows Raw Input, direct orbit response, equal-axis sensitivity, invert Y and automatic controller handoff. No added acceleration or virtual stick conversion. |
 | **Press-to-bind controls** | Keyboard, mouse, wheel and controller inputs. **Four bindings per action**, controller selection and touchpad gestures. |
 | **Graphics & frame rate** | Unlocked FPS, configurable cap, sharpening and model detail. Toggle motion blur, depth of field, chromatic aberration, SSAO, shadows and reflections. |
 | **In-game settings** | **Insert / L3 + R3**. Mouse navigation, supported live changes, saved configuration and restart controls. |

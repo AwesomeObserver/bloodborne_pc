@@ -28,7 +28,8 @@ HIGHLIGHTS
   current DLLs may substitute; E/F are deprecated. Render scale is independent.
 - Optional DLSS FG x2 or FSR 3.1 FG x2, selected separately from upscaling.
   FSR FG can also run with DLSS or native TAA.
-- Raw mouse camera: direct angles, equal-axis gain, invert Y and controller handoff.
+- Raw mouse camera: direct orbit response, equal-axis gain, invert Y and controller
+  handoff. Mouse-owned rotation bypasses the game's angular hold band and chase.
 - Press-to-bind keyboard, mouse and controller; four bindings per action.
 - Unlocked FPS, configurable frame cap, sharpening and individual effect toggles.
 - In-game settings, mod ordering, XML patches, camera tweaks and optional cheats.
@@ -121,7 +122,8 @@ https://github.com/AwesomeObserver/bloodborne_pc/blob/windows/docs/mouse-camera-
 Camera response diagnostics: run Trace Mouse Camera.cmd, load a character,
 enable F4 and record direction reversals, vertical sweeps and stops for about
 15 seconds. Close the game; the report ZIP appears in logs\.
-This optional mode collects evidence and does not fix the reported camera inertia.
+The direct mouse-orbit fix is active in normal launches; tracing is optional.
+Its isolated camera-code replay passed. Full gameplay validation remains pending.
 
 GNU GPL v2 or later. See LICENSE, licenses\ and README.md for third-party credits.
 Not affiliated with Sony Interactive Entertainment or FromSoftware.

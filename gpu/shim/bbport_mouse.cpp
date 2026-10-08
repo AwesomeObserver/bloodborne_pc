@@ -46,6 +46,16 @@ constexpr std::array<unsigned char, 18> MainCode{
 // disable movement auto-rotation; the other stores also apply controller
 // response and interpolation. They yield only while the mouse owns the camera.
 constexpr std::size_t FunctionBegin = 0x143ac60, FunctionEnd = 0x143fad0;
+// Confirmed by the 2026-10-08 gameplay trace: this blends the final orbit
+// position with per-axis chase rates and a horizontal angular dead band.
+// Equal current angles alone do not bypass it. Override only its local blend
+// operand, after collision queries and before radial distance/collision handling.
+constexpr std::size_t OrbitBlend = 0x143e7e6;
+constexpr unsigned char OrbitCode[]{
+    0xc4,0xc2,0x79,0x18,0x8d,0x30,0x01,0x00,0x00, // vbroadcastss xmm1,[r13+130]
+    0xc5,0xf8,0x59,0xc1, 0xc5,0xd8,0x58,0xc0, // k += (1-k) * override
+    0xc5,0xf8,0x28,0xa5,0xb0,0xfd,0xff,0xff, // old orbit position
+    0xc5,0x90,0x5c,0xcc, 0xc5,0xf0,0x59,0xc0, 0xc5,0xd8,0x58,0xc0};
 constexpr unsigned ExpectedStoreSignatures = 29;
 constexpr std::size_t TrampolineSize = 16384;
 
@@ -123,6 +133,26 @@ bool StoreInstruction(const unsigned char* p, bool angles_only = false) {
     return offset == 0x130 || offset == 0x140 || offset == 0x144 || offset == 0x150 ||
            offset == 0x294 || (!angles_only && (offset == 0x148 || offset == 0x14c ||
                                                offset == 0x26c || offset == 0x270));
+}
+
+// MOV-immediate and VEXTRACTPS angle writes also occur in this routine.
+// Decode whole instructions; these encodings must not escape the ownership
+// gate or be matched inside another instruction's displacement/immediate.
+bool AngleStore(const ZydisDecodedInstruction& inst, const ZydisDecodedOperand* operands) {
+    if (operands[0].type != ZYDIS_OPERAND_TYPE_MEMORY || operands[0].size != 32 ||
+        operands[0].mem.base != ZYDIS_REGISTER_R13 ||
+        operands[0].mem.index != ZYDIS_REGISTER_NONE) return false;
+    const auto offset = operands[0].mem.disp.value;
+    if (offset != 0x140 && offset != 0x144 && offset != 0x148 && offset != 0x14c &&
+        offset != 0x150 && offset != 0x26c && offset != 0x270 && offset != 0x294) return false;
+    if (inst.mnemonic == ZYDIS_MNEMONIC_MOV)
+        return inst.length == 11 && operands[1].type == ZYDIS_OPERAND_TYPE_IMMEDIATE;
+    if (operands[1].type != ZYDIS_OPERAND_TYPE_REGISTER ||
+        operands[1].reg.value < ZYDIS_REGISTER_XMM0 ||
+        operands[1].reg.value > ZYDIS_REGISTER_XMM15) return false;
+    return (inst.mnemonic == ZYDIS_MNEMONIC_VMOVSS && inst.length == 9) ||
+           (inst.mnemonic == ZYDIS_MNEMONIC_VEXTRACTPS && inst.length == 10 &&
+            operands[2].type == ZYDIS_OPERAND_TYPE_IMMEDIATE && operands[2].imm.value.u <= 3);
 }
 
 // Relocate a complete, position-independent prologue, never an arbitrary five
@@ -317,7 +347,9 @@ void Apply(void* pointer) {
     Write(camera, 0x140, p); Write(camera, 0x148, p);
     Write(camera, 0x150, p); Write(camera, 0x26c, p);
     Write(camera, 0x144, a); Write(camera, 0x14c, a); Write(camera, 0x270, a);
-    Write(camera, 0x130, 0.f); Write(camera, 0x294, 0.f);
+    // +130 is an orbit-chase override, not angular velocity. Leave its native
+    // timer/state alone; the orbit hook supplies unity only at the blend itself.
+    Write(camera, 0x294, 0.f);
 }
 
 bool Install(unsigned char* image, std::uint64_t size) {
@@ -332,6 +364,10 @@ bool Install(unsigned char* image, std::uint64_t size) {
     if (std::memcmp(image + Sites[0], MainCode.data(), MainCode.size())) {
         LogSignature(image, Sites[0], MainCode.size());
         return fail("Camera instruction signature differs (game version or conflicting patch)");
+    }
+    if (std::memcmp(image + OrbitBlend, OrbitCode, sizeof(OrbitCode))) {
+        LogSignature(image, OrbitBlend, sizeof(OrbitCode));
+        return fail("Camera orbit blend signature differs (game version or conflicting patch)");
     }
     std::array<bool, Sites.size()> rotation_patched{};
     for (unsigned i = 1; i < Sites.size(); ++i) {
@@ -349,22 +385,30 @@ bool Install(unsigned char* image, std::uint64_t size) {
     struct Hook { std::size_t offset, size; };
     std::vector<Hook> hooks{{FunctionBegin, entry_size}};
     unsigned signatures = unsigned(std::count(rotation_patched.begin(), rotation_patched.end(), true));
-    // The exact VEX encoding/count is a second signature for this routine. Each
-    // match is independently decoded before copying it to a trampoline. Only
-    // r13-relative scalar stores are relocated; no RIP-relative operands/branches.
-    for (std::size_t offset = FunctionBegin; offset + 9 <= FunctionEnd; ++offset) {
+    ZydisDecoder decoder;
+    ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64);
+    unsigned extracts = 0, immediates = 0;
+    for (std::size_t offset = FunctionBegin; offset < FunctionEnd;) {
         const auto* p = image + offset;
-        if (!StoreInstruction(p)) continue;
-        if (p[0] == 0xc4 && p[1] == 0xc1 && p[2] == 0x7a && p[3] == 0x11 &&
+        ZydisDecodedInstruction inst{};
+        ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT]{};
+        if (!ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, p, FunctionEnd - offset, &inst, operands)))
+            return fail("Cannot decode complete camera update routine");
+        if (inst.length == 9 && p[0] == 0xc4 && p[1] == 0xc1 && p[2] == 0x7a && p[3] == 0x11 &&
             StoreInstruction(p, true)) ++signatures;
-        hooks.push_back({offset, 9});
-        offset += 8;
+        if (AngleStore(inst, operands)) {
+            hooks.push_back({offset, inst.length});
+            extracts += inst.mnemonic == ZYDIS_MNEMONIC_VEXTRACTPS;
+            immediates += inst.mnemonic == ZYDIS_MNEMONIC_MOV;
+        }
+        offset += inst.length;
     }
-    if (signatures != ExpectedStoreSignatures || hooks.size() > 65) {
-        std::fprintf(stderr, "Mouse camera: camera routine has %u store signatures, expected %u (%zu live stores)\n",
-                     signatures, ExpectedStoreSignatures, hooks.size() - 1);
+    if (signatures != ExpectedStoreSignatures || extracts != 2 || immediates != 5 || hooks.size() > 64) {
+        std::fprintf(stderr, "Mouse camera: camera routine has %u/%u scalar signatures, %u/2 extract stores, %u/5 immediate stores (%zu angle/target stores)\n",
+                     signatures, ExpectedStoreSignatures, extracts, immediates, hooks.size() - 1);
         return fail("Camera response signature differs (details in the game log)");
     }
+    hooks.push_back({OrbitBlend, 9});
     unsigned a, b, c, d;
     __cpuid(1, a, b, c, d);
     if (!(c & (1u << 27))) return fail("OS extended register state is unavailable");
@@ -379,6 +423,7 @@ bool Install(unsigned char* image, std::uint64_t size) {
     try {
         Xbyak::CodeGenerator code(TrampolineSize, memory);
         using namespace Xbyak::util;
+        Xbyak::Label unity;
         for (unsigned i = 0; i < hooks.size(); ++i) {
             const auto hook = hooks[i];
             code.align(16);
@@ -415,6 +460,11 @@ bool Install(unsigned char* image, std::uint64_t size) {
             if (!i) {
                 Bridge(code, b, mask, rdi);
                 code.db(image + hook.offset, hook.size);
+            } else if (hook.offset == OrbitBlend) {
+                // The game's formula k + (1-k)*1 gives equal, immediate XYZ
+                // orbit response. Keep the original instruction for native
+                // controller/lock-on ownership. No camera parameter is changed.
+                code.vbroadcastss(xmm1, ptr[rip + unity]);
             }
             code.jmp(done, Xbyak::CodeGenerator::T_NEAR);
             code.L(original);
@@ -424,6 +474,8 @@ bool Install(unsigned char* image, std::uint64_t size) {
             code.L(done);
             code.jmp(image + hook.offset + hook.size);
         }
+        code.align(4);
+        code.L(unity); code.dd(0x3f800000);
         code.ready();
         DWORD old;
         if (!VirtualProtect(memory, TrampolineSize, PAGE_EXECUTE_READ, &old)) {
@@ -449,8 +501,8 @@ bool Install(unsigned char* image, std::uint64_t size) {
     monocular_base = reinterpret_cast<uintptr_t>(image) + 0x553e8d0;
     problem = nullptr;
     available.store(true, std::memory_order_release);
-    std::printf("Mouse camera: verified update-entry hook ready (F4); %zu angle/target stores gated, %u existing rotation-patch sites preserved; native controller handoff\n",
-        hooks.size() - 1, unsigned(std::count(rotation_patched.begin(), rotation_patched.end(), true)));
+    std::printf("Mouse camera: verified update-entry and direct orbit hooks ready (F4); %zu angle/target stores gated, %u existing rotation-patch sites preserved; native controller handoff\n",
+        hooks.size() - 2, unsigned(std::count(rotation_patched.begin(), rotation_patched.end(), true)));
     return true;
 #else
     (void)image; (void)size;

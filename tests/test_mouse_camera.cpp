@@ -95,6 +95,11 @@ int main(int argc, char** argv) {
         MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
     assert(image);
     const auto all_stores = CameraFixture::Populate(image, StoreOffsets);
+    // Reject a changed orbit equation before patching any entry or angle store.
+    image[CameraFixture::Orbit + 9] ^= 1;
+    assert(!BbMouse::Install(image, ImageSize));
+    assert(!std::memcmp(image + Sites[0], Loads, sizeof(Loads)));
+    image[CameraFixture::Orbit + 9] ^= 1;
     // Similar stores outside the camera routine or to unrelated fields must
     // remain untouched. Discovery is confined to the verified camera routine.
     const std::array<unsigned char,9> outside{0xc4,0xc1,0x7a,0x11,0x95,0x40,1,0,0};
@@ -157,9 +162,11 @@ int main(int argc, char** argv) {
     std::memcpy(entry_installed.data(), image + CameraFixture::Begin, entry_installed.size());
     for (unsigned i = 0; i < Sites.size(); ++i)
         std::memcpy(installed[i].data(), image + Sites[i], i ? 9 : 18);
-    std::vector<std::array<unsigned char,9>> all_installed(all_stores.size());
+    std::vector<std::array<unsigned char,11>> all_installed(all_stores.size());
     for (unsigned i = 0; i < all_stores.size(); ++i)
-        std::memcpy(all_installed[i].data(), image + all_stores[i].offset, 9);
+        std::memcpy(all_installed[i].data(), image + all_stores[i].offset, all_stores[i].size);
+    std::array<unsigned char,9> orbit_installed{};
+    std::memcpy(orbit_installed.data(), image + CameraFixture::Orbit, orbit_installed.size());
     DWORD old;
     assert(VirtualProtect(image, ImageSize, PAGE_EXECUTE_READ, &old));
     FlushInstructionCache(GetCurrentProcess(), image, ImageSize);
@@ -188,16 +195,16 @@ int main(int argc, char** argv) {
         BbMouse::SetActive(false);
         Put(camera, site.field, .25f);
         store(camera.data(), &report); Check(report);
-        assert(Get(camera, site.field) == (patched ? .25f : .875f));
+        assert(Get(camera, site.field) == (patched ? .25f : site.value));
         BbMouse::SetActive(true);
         BbMouse::Motion(1,1); BbMouse::Apply(camera.data()); // claim camera, not merely cursor capture
         Put(camera, site.field, .25f);
         for (unsigned frame = 0; frame < 120; ++frame) store(camera.data(), &report);
         Check(report);
-        assert(Get(camera, site.field) == .25f);
+        assert(Get(camera, site.field) == (site.field == 0x130 && !patched ? site.value : .25f));
         Put(camera, 0x154, 1.f);
         store(camera.data(), &report); Check(report);
-        assert(Get(camera, site.field) == (patched ? .25f : .875f));
+        assert(Get(camera, site.field) == (patched ? .25f : site.value));
         Put(camera, 0x154, 0.f);
     }
     BbMouse::SetActive(false);
@@ -224,7 +231,8 @@ int main(int argc, char** argv) {
     for (unsigned i = 0; i < stores.size(); ++i) {
         Put(camera, StoreOffsets[i], .25f);
         stores[i](camera.data(), &report);
-        assert(Get(camera, StoreOffsets[i]) == .25f); // auto-rotation suppressed
+        assert(Get(camera, StoreOffsets[i]) ==
+            (StoreOffsets[i] == 0x130 && !rotation_patched[i] ? .875f : .25f));
         Check(report);
     }
     Put(camera, 0x144, .4f);
@@ -280,7 +288,7 @@ int main(int argc, char** argv) {
         run(camera.data(), &report); Check(report);
         assert(std::abs(report.pitch - .2f) < 1e-6f && report.early_yaw == report.pitch);
         for (auto field : {0x148,0x14c,0x150,0x26c,0x270}) assert(Get(camera, field) == report.pitch);
-        assert(Get(camera, 0x130) == 0.f && Get(camera, 0x294) == 0.f);
+        assert(Get(camera, 0x130) == .25f && Get(camera, 0x294) == 0.f);
     }
 
     for (int fps : {30, 60, 120, 240}) {
@@ -374,7 +382,8 @@ int main(int argc, char** argv) {
         assert(!std::memcmp(installed[i].data(), image + Sites[i], i ? 9 : 18));
     assert(!std::memcmp(entry_installed.data(), image + CameraFixture::Begin, entry_installed.size()));
     for (unsigned i = 0; i < all_stores.size(); ++i)
-        assert(!std::memcmp(all_installed[i].data(), image + all_stores[i].offset, 9));
+        assert(!std::memcmp(all_installed[i].data(), image + all_stores[i].offset, all_stores[i].size));
+    assert(!std::memcmp(orbit_installed.data(), image + CameraFixture::Orbit, orbit_installed.size()));
 
     const auto bench = [&](bool capture, bool moving) {
         BbMouse::SetActive(capture);
