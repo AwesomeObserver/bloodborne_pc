@@ -268,6 +268,24 @@ static int pad_value(SDL_Gamepad *g, int input) {
 static uint8_t key_axis(uint8_t value, int negative, int positive) {
     return negative || positive ? (uint8_t)(128-(negative ? 128 : 0)+(positive ? 127 : 0)) : value;
 }
+/* Movement keys describe one stick vector, not two independently saturated
+ * axes. Square corners (W+A = -1,-1) exceed full stick magnitude by sqrt(2).
+ * Limit keyboard-driven movement to the same circle as an analog stick before
+ * converting through the normal SDL-to-Orbis axis path. No temporal filtering.
+ * Keep unbound axes from the gamepad, and leave controller-only samples intact. */
+static void key_movement(PadData *d, int left, int right, int up, int down) {
+    if (!(left || right || up || down)) return;
+    if (left || right) d->left_x=left==right ? 128 : left ? 0 : 255;
+    if (up || down) d->left_y=up==down ? 128 : up ? 0 : 255;
+    const float x=((int)d->left_x-128)/(d->left_x<128 ? 128.0f : 127.0f);
+    const float y=((int)d->left_y-128)/(d->left_y<128 ? 128.0f : 127.0f);
+    const float length2=x*x+y*y;
+    if (length2>1.0f) {
+        const float scale=1.0f/SDL_sqrtf(length2);
+        d->left_x=axis((int16_t)SDL_lroundf(x*scale*(x<0 ? 32768.0f : 32767.0f)));
+        d->left_y=axis((int16_t)SDL_lroundf(y*scale*(y<0 ? 32768.0f : 32767.0f)));
+    }
+}
 static void apply_keyboard(PadData *d, const bool *k, Uint32 mouse) {
     for (int i=IN_CROSS;i<=IN_RIGHT;++i)
         if (i!=IN_TOUCHPAD && i!=IN_TOUCHPAD_RIGHT && key_down(k,mouse,i)) d->buttons|=input_buttons[i];
@@ -275,8 +293,8 @@ static void apply_keyboard(PadData *d, const bool *k, Uint32 mouse) {
     if (key_down(k,mouse,IN_TOUCHPAD_RIGHT)) touch_click(d,1);
     if (key_down(k,mouse,IN_L2)) d->l2=255;
     if (key_down(k,mouse,IN_R2)) d->r2=255;
-    d->left_x=key_axis(d->left_x,key_down(k,mouse,IN_MOVE_LEFT),key_down(k,mouse,IN_MOVE_RIGHT));
-    d->left_y=key_axis(d->left_y,key_down(k,mouse,IN_MOVE_UP),key_down(k,mouse,IN_MOVE_DOWN));
+    key_movement(d,key_down(k,mouse,IN_MOVE_LEFT),key_down(k,mouse,IN_MOVE_RIGHT),
+                 key_down(k,mouse,IN_MOVE_UP),key_down(k,mouse,IN_MOVE_DOWN));
     d->right_x=key_axis(d->right_x,key_down(k,mouse,IN_LOOK_LEFT),key_down(k,mouse,IN_LOOK_RIGHT));
     d->right_y=key_axis(d->right_y,key_down(k,mouse,IN_LOOK_UP),key_down(k,mouse,IN_LOOK_DOWN));
 }

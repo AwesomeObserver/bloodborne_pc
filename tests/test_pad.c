@@ -23,6 +23,67 @@ static void inject(const char *path, const char *tokens) {
     usleep(25000);
 }
 
+static void movement_keys(bool *keys, unsigned held) {
+    keys[SDL_SCANCODE_W]=(held&1)!=0;
+    keys[SDL_SCANCODE_S]=(held&2)!=0;
+    keys[SDL_SCANCODE_A]=(held&4)!=0;
+    keys[SDL_SCANCODE_D]=(held&8)!=0;
+}
+
+static void test_keyboard_movement(SDL_Joystick *joystick) {
+    bool keys[SDL_SCANCODE_COUNT]={0};
+    /* Compare every digital direction with a virtual analog controller on the
+     * unit circle, through scePadReadState and the actual SDL axis conversion.
+     * Opposite keys cancel exactly, with no unintended -1 axis value. */
+    for (unsigned held=0;held<16;++held) {
+        movement_keys(keys,held);
+        PadData mapped={.left_x=128,.left_y=128,.right_x=17,.right_y=231};
+        apply_keyboard(&mapped,keys,0);
+        const int x=((held&8)!=0)-((held&4)!=0);
+        const int y=((held&2)!=0)-((held&1)!=0);
+        const int magnitude=x && y ? 23170 : 32767;
+        const int raw_x=x<0 && !y ? -32768 : x*magnitude;
+        const int raw_y=y<0 && !x ? -32768 : y*magnitude;
+        assert(SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_LEFTX,(Sint16)raw_x));
+        assert(SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_LEFTY,(Sint16)raw_y));
+        SDL_UpdateJoysticks(); SDL_UpdateGamepads();
+        PadData analog;
+        assert(pad_read_state(1,&analog)==0);
+        assert(mapped.left_x==analog.left_x && mapped.left_y==analog.left_y);
+        assert(mapped.right_x==17 && mapped.right_y==231);
+        const float vx=((int)mapped.left_x-128)/128.0f;
+        const float vy=((int)mapped.left_y-128)/128.0f;
+        const float strength=SDL_sqrtf(vx*vx+vy*vy);
+        assert(x || y ? strength>.99f && strength<1.01f : strength==0.f);
+    }
+    /* Keep W held while repeatedly adding/releasing/changing A and D. Every
+     * sample remains at full movement strength; no neutral or square-corner
+     * sample can leak into the transition. */
+    static const unsigned transitions[]={1,5,1,9,1,5,9,1};
+    for (unsigned repeat=0;repeat<60;++repeat) for (unsigned n=0;n<sizeof(transitions)/sizeof(*transitions);++n) {
+        movement_keys(keys,transitions[n]);
+        PadData mapped={.left_x=128,.left_y=128};
+        apply_keyboard(&mapped,keys,0);
+        assert(mapped.left_y==(transitions[n]==1 ? 0 : 37));
+        assert(mapped.left_x==(transitions[n]==1 ? 128 : transitions[n]==5 ? 37 : 218));
+    }
+    memset(keys,0,sizeof(keys));
+    PadData mixed={.left_x=0,.left_y=255,.right_x=17,.right_y=231};
+    apply_keyboard(&mixed,keys,0);
+    assert(mixed.left_x==0 && mixed.left_y==255); /* controller-only passthrough */
+    keys[SDL_SCANCODE_W]=true;
+    mixed.left_x=255; mixed.left_y=128;
+    apply_keyboard(&mixed,keys,0);
+    assert(mixed.left_x==218 && mixed.left_y==37); /* W + native X share the circle */
+    keys[SDL_SCANCODE_S]=true;
+    mixed.left_x=63; mixed.left_y=211;
+    apply_keyboard(&mixed,keys,0);
+    assert(mixed.left_x==63 && mixed.left_y==128);
+    assert(SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_LEFTX,0));
+    assert(SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_LEFTY,0));
+    SDL_UpdateJoysticks(); SDL_UpdateGamepads();
+}
+
 int main(void) {
     char path[4096];
     int fd=bb_test_temp(path,sizeof(path),"bbport-pad-test");
@@ -116,13 +177,14 @@ int main(void) {
     assert(data.buttons==(BTN_CROSS|BTN_R2|BTN_R1) && data.r2==255);
     assert(bindings[IN_CROSS].key_count==2 && bindings[IN_CROSS].keys[0]==SDL_SCANCODE_X &&
            bindings[IN_CROSS].keys[1]==SDL_SCANCODE_SPACE);
+    test_keyboard_movement(joystick);
     /* Capture-helper names round-trip through the actual INI parser and pad ABI. */
     FILE *mouse_config=fopen(config,"w");
     assert(mouse_config);
     fputs("key.cross=Space, Mouse Left\nkey.r1=Mouse X1\nkey.r2=Mouse Right\n"
           "key.square=Mouse Middle\nkey.circle=Mouse X2\nkey.up=Mouse Wheel Up\n"
           "key.down=Mouse Wheel Down\nkey.left=Mouse Wheel Left\nkey.right=Mouse Wheel Right\n"
-          "key.triangle=Comma\nkey.move_up=Mouse Left\n",mouse_config);
+          "key.triangle=Comma\nkey.move_up=Mouse Left, T\nkey.move_right=H\n",mouse_config);
     fclose(mouse_config);
     load_bindings();
     assert(bindings[IN_CROSS].key_count==1 && bindings[IN_CROSS].mouse_count==1);
@@ -143,6 +205,16 @@ int main(void) {
     mapped=(PadData){0};
     apply_keyboard(&mapped,keyboard,0);
     assert(mapped.buttons==0);
+    /* Normalize actions after remapping, including a mouse-bound movement key. */
+    keyboard[SDL_SCANCODE_T]=keyboard[SDL_SCANCODE_H]=true;
+    mapped=(PadData){.left_x=128,.left_y=128};
+    apply_keyboard(&mapped,keyboard,0);
+    assert(mapped.left_x==218 && mapped.left_y==37);
+    keyboard[SDL_SCANCODE_T]=false;
+    mapped=(PadData){.left_x=128,.left_y=128};
+    apply_keyboard(&mapped,keyboard,SDL_BUTTON_LMASK);
+    assert(mapped.left_x==218 && mapped.left_y==37);
+    keyboard[SDL_SCANCODE_H]=false;
     mouse_buttons=SDL_BUTTON_RMASK;
     capture=1;
     assert(pad_read_state(1,&data)==0 && data.buttons==0 && data.r2==0);
@@ -155,5 +227,5 @@ int main(void) {
     SDL_Quit();
     unlink(path);
     unlink(config);
-    puts("PASS: pad ABI, debug camera chord, left/right clicks, SDL touch coordinates, overlay capture, controls");
+    puts("PASS: pad ABI, circular keyboard movement, W/A/D transitions, opposing keys, native/remapped input, debug camera chord, left/right clicks, SDL touch coordinates, overlay capture, controls");
 }

@@ -61,6 +61,9 @@ On Controls, click a binding and press a key, mouse button, wheel direction or
 controller button/trigger. + adds an alternative; Clear removes bindings.
 Close the capture window to cancel. Remaps apply at the next game launch.
 
+Movement keys use a circular stick range. Adding A/D while holding W changes
+direction without a jump in stick strength. Opposite movement keys cancel.
+
 The launcher and in-game menu expose mouse sensitivity and invert Y. Opening the
 port menu, name entry or switching windows releases capture. Lock-on uses the
 game's camera. Conflicting camera patches disable raw camera with a reason.

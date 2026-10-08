@@ -77,6 +77,9 @@ You can add it to Steam or use **Advanced → Desktop shortcut**.
 On **Controls**, click a binding and press the desired input. **+** adds an
 alternative; **Clear** removes bindings. Remaps apply at the next game launch.
 
+Keyboard movement uses the circular stick range: diagonal combinations keep the
+same movement strength as a single direction. Opposite movement keys cancel.
+
 Mouse sensitivity and invert Y are available in the launcher and in-game menu.
 Opening the port menu, name entry or switching windows releases capture; lock-on
 uses the game's camera. [Mouse camera details →](docs/mouse-camera-windows.md)
