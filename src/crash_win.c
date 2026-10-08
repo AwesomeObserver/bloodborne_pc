@@ -1,4 +1,4 @@
-/* Preserve the failing thread and loaded module versions when a Windows driver crashes.
+/* Preserve the original exception, guest callers and nearby objects on Windows.
  * DbgHelp runs on a dedicated thread, with a bounded wait on the faulting thread. */
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -8,6 +8,7 @@
 #include <dbghelp.h>
 #include <stdio.h>
 #include <wchar.h>
+#include <stdint.h>
 #include "crash_win.h"
 
 typedef BOOL (WINAPI *WriteDump)(HANDLE, DWORD, HANDLE, MINIDUMP_TYPE,
@@ -21,6 +22,126 @@ static EXCEPTION_POINTERS pointers = {&record, &context};
 static DWORD fault_thread, dump_error;
 static wchar_t dump_directory[1024];
 static char dump_path_utf8[4096];
+static uintptr_t guest_base;
+static size_t guest_size;
+
+/* Manually mapped guest code has no PE module for DbgHelp to copy. A normal
+ * minidump keeps only 256 bytes around the fault PC and omits guest heap objects.
+ * Select at most 2 MiB of extra readable pages, without taking runtime locks or
+ * allocating on a possibly damaged heap. Nothing here runs during gameplay. */
+#define EXTRA_BYTES (2u*1024u*1024u)
+#define MAX_PAGES 512u
+#define MAX_FRAMES 32u
+#define MAX_ROOT_PAGES 128u
+static struct { uintptr_t address; unsigned object; } pages[MAX_PAGES];
+static unsigned page_count, object_pages, page_cursor, frame_count;
+static size_t system_page;
+static ULONGLONG capture_deadline;
+
+void crash_win_set_guest(const void *base, size_t size) {
+    guest_base = (uintptr_t)base;
+    guest_size = size;
+}
+
+static int read_memory(uintptr_t address, void *out, size_t size) {
+    SIZE_T got = 0;
+    return ReadProcessMemory(GetCurrentProcess(), (const void *)address, out, size, &got) && got == size;
+}
+
+static void add_page(uintptr_t address, unsigned object) {
+    if (address < 65536 || page_count >= MAX_PAGES ||
+            (page_count+1)*system_page > EXTRA_BYTES || GetTickCount64() >= capture_deadline) return;
+    address -= address % system_page;
+    for (unsigned i=0; i<page_count; ++i) if (pages[i].address == address) return;
+    MEMORY_BASIC_INFORMATION info;
+    if (!VirtualQuery((const void *)address, &info, sizeof(info)) || info.State != MEM_COMMIT ||
+            (info.Protect & (PAGE_NOACCESS | PAGE_GUARD))) return;
+    const DWORD readable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
+        PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+    if (!(info.Protect & readable)) return;
+    /* Do not follow code or DLL globals as heap roots. Guest heaps are private
+     * allocations; executable pages are captured explicitly for PCs/callers. */
+    if (object && (info.Type == MEM_IMAGE ||
+            (info.Protect & (PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)))) return;
+    pages[page_count].address = address;
+    pages[page_count++].object = object;
+    object_pages += object != 0;
+}
+
+static void add_object(uintptr_t address) {
+    if (address < 65536 || address > UINTPTR_MAX-system_page) return;
+    /* Keep fields on either side of an interior pointer, including fields
+     * crossing a page boundary. Never make an unreadable page readable. */
+    add_page(address, 1);
+    add_page(address-256, 1);
+    add_page(address+512, 1);
+}
+
+static void add_code(uintptr_t address) {
+    if (!guest_base || address < guest_base || address-guest_base >= guest_size) return;
+    uintptr_t first = address-guest_base > 8192 ? address-8192 : guest_base;
+    uintptr_t last = guest_base+guest_size;
+    if (address <= UINTPTR_MAX-8192 && address+8192 < last) last = address+8192;
+    first -= first % system_page;
+    for (uintptr_t p=first; p<last && p<=UINTPTR_MAX-system_page; p+=system_page) add_page(p, 0);
+}
+
+static void select_memory(void) {
+    page_count = object_pages = page_cursor = frame_count = 0;
+    capture_deadline = GetTickCount64()+1500;
+    add_code((uintptr_t)context.Rip);
+    uintptr_t frame = (uintptr_t)context.Rbp;
+    for (; frame_count<MAX_FRAMES && GetTickCount64()<capture_deadline; ++frame_count) {
+        uintptr_t pair[2];
+        if (!read_memory(frame, pair, sizeof(pair))) break;
+        add_code(pair[1]);
+        /* A corrupt chain must not cause an unbounded walk or address wrap. */
+        if (pair[0] <= frame || pair[0]-frame > 1024*1024) break;
+        frame = pair[0];
+    }
+    const uintptr_t registers[] = {context.Rax,context.Rbx,context.Rcx,context.Rdx,
+        context.Rsi,context.Rdi,context.R8,context.R9,context.R10,context.R11,
+        context.R12,context.R13,context.R14,context.R15};
+    for (unsigned i=0; i<sizeof(registers)/sizeof(registers[0]); ++i) add_object(registers[i]);
+    if (record.ExceptionCode == EXCEPTION_ACCESS_VIOLATION && record.NumberParameters >= 2)
+        add_object((uintptr_t)record.ExceptionInformation[1]);
+    /* Stack locals often contain the object from which a now-null field was
+     * loaded. Normal minidumps preserve the stack, but not its pointed-to data. */
+    uintptr_t words[32];
+    uintptr_t stack = (uintptr_t)context.Rsp;
+    for (size_t offset=0; offset<16384 && stack<=UINTPTR_MAX-offset &&
+            object_pages<MAX_ROOT_PAGES && GetTickCount64()<capture_deadline; offset+=sizeof(words)) {
+        if (!read_memory(stack+offset, words, sizeof(words))) break;
+        for (unsigned j=0; j<sizeof(words)/sizeof(words[0]); ++j) add_object(words[j]);
+    }
+    /* One further pointer level. Interior pointers may address an object in
+     * the middle of a page, so scan the whole selected root page. */
+    unsigned roots = page_count;
+    uintptr_t object_words[512];
+    size_t bytes = system_page < sizeof(object_words) ? system_page : sizeof(object_words);
+    for (unsigned i=0; i<roots && GetTickCount64()<capture_deadline; ++i) {
+        if (!pages[i].object || !read_memory(pages[i].address, object_words, bytes)) continue;
+        for (size_t j=0; j<bytes/sizeof(object_words[0]); ++j) add_object(object_words[j]);
+    }
+}
+
+static BOOL CALLBACK dump_callback(void *unused, MINIDUMP_CALLBACK_INPUT *input,
+        MINIDUMP_CALLBACK_OUTPUT *output) {
+    (void)unused;
+    if (input->CallbackType == MemoryCallback) {
+        if (page_cursor >= page_count) return FALSE;
+        output->MemoryBase = pages[page_cursor++].address;
+        output->MemorySize = (ULONG)system_page;
+    } else if (input->CallbackType == ReadMemoryFailureCallback) {
+        /* Other guest threads may release an optional page during collection.
+         * Retain the exception and readable pages when that happens. */
+        output->Status = S_OK;
+    } else if (input->CallbackType == CancelCallback) {
+        output->CheckCancel = FALSE;
+        output->Cancel = FALSE;
+    }
+    return TRUE;
+}
 
 static DWORD WINAPI dump_worker(void *unused) {
     (void)unused;
@@ -38,9 +159,28 @@ static DWORD WINAPI dump_worker(void *unused) {
         dump_error = GetLastError();
     } else {
         MINIDUMP_EXCEPTION_INFORMATION info = {fault_thread, &pointers, FALSE};
+        select_memory();
+        char description[512];
+        int length = snprintf(description, sizeof(description),
+            "BBPORT_GUEST_CONTEXT_V1\nimage_base=0x%llx\nimage_size=0x%llx\n"
+            "page_size=%zu\nextra_pages=%u\nextra_limit=%u\ncaller_frames=%u\n",
+            (unsigned long long)guest_base, (unsigned long long)guest_size,
+            system_page, page_count, EXTRA_BYTES, frame_count);
+        MINIDUMP_USER_STREAM stream = {CommentStreamA, (ULONG)length+1, description};
+        MINIDUMP_USER_STREAM_INFORMATION streams = {1, &stream};
+        MINIDUMP_CALLBACK_INFORMATION callback = {dump_callback, NULL};
         if (!write_dump(GetCurrentProcess(), GetCurrentProcessId(), file,
-                MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules, &info, NULL, NULL)) {
-            dump_error = GetLastError();
+                MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules | MiniDumpWithFullMemoryInfo,
+                &info, &streams, &callback)) {
+            /* Optional context must not cost us the original minimal dump. */
+            LARGE_INTEGER start = {.QuadPart=0};
+            if (!SetFilePointerEx(file, start, NULL, FILE_BEGIN) || !SetEndOfFile(file) ||
+                    !write_dump(GetCurrentProcess(), GetCurrentProcessId(), file,
+                        MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules, &info, NULL, NULL)) {
+                dump_error = GetLastError();
+            }
+        }
+        if (dump_error) {
             CloseHandle(file);
             DeleteFileW(path); // discard only this newly created, incomplete dump
         } else {
@@ -52,6 +192,9 @@ static DWORD WINAPI dump_worker(void *unused) {
 }
 
 void crash_win_init(void) {
+    SYSTEM_INFO system_info;
+    GetSystemInfo(&system_info);
+    system_page = system_info.dwPageSize;
     const unsigned char *base = (const unsigned char *)GetModuleHandleW(NULL);
     const IMAGE_DOS_HEADER *dos = (const IMAGE_DOS_HEADER *)base;
     const IMAGE_NT_HEADERS64 *pe = (const IMAGE_NT_HEADERS64 *)(base + dos->e_lfanew);

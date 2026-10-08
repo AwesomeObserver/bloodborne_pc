@@ -111,6 +111,7 @@ port's data folder. **Advanced → Save session log** enables additional session
 - [Raw mouse camera and validation](docs/mouse-camera-windows.md)
 - [Windows 0.4 migration and validation](docs/windows-upstream-0.4.md)
 - [Windows crash analysis](docs/crash-analysis-windows-v1.5.md)
+- [October 8 gameplay crash investigation](docs/crash-analysis-2026-10-08.md)
 
 ## Credits & license
 

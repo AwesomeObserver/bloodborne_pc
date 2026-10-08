@@ -99,6 +99,8 @@ logs\crashes\         Native minidumps under the port's data folder.
 
 Crash dumps stay on your computer. BB_CRASH_DUMP=0 disables them;
 BB_CRASH_DIR selects an existing output directory.
+Guest crash context adds up to 2 MiB of nearby code and object pages to the
+normal minidump. Collection runs only after a crash.
 
 HELP AND DOCUMENTATION
 

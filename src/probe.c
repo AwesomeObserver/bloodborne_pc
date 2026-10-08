@@ -627,6 +627,9 @@ int main(int argc, char **argv) {
     image = allocate(round_page(size));
     if (fread(image, 1, size, f) != size || fgetc(f) != EOF) fail("incorrect memory image size");
     fclose(f);
+#ifdef _WIN32
+    crash_win_set_guest(image, (size_t)size);
+#endif
     if (!cpu_only) {
         char title[128]="Bloodborne", serial[16]="UNKNOWN", sfo[4096];
         uint32_t attributes=0;
