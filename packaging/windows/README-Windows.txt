@@ -131,14 +131,16 @@ Its isolated camera-code replay passed. Full gameplay validation remains pending
 Sustained diagonal movement diagnostics: run Trace Keyboard Movement.cmd.
 After loading, enable F4 and move the mouse once. Hold W for 3 seconds,
 W+A for 5 seconds, then W+D for 5 seconds without moving the mouse.
+Also start with A or D, then add W or S and hold each combination for 3 seconds.
 Repeat while looking around, then disable F4 and repeat W/W+A/W+D.
 Close the game and send the mouse-camera ZIP from logs\.
 The V2 report records final pad state, camera bases and follow vectors together.
 For a controller comparison, leave F4 enabled and move the mouse once before
 repeating the same movement directions with the left stick. Keep the right stick neutral.
-The previous inward-rounding change was rejected after it made W+D jerk too.
-This build restores the previously working W+D value and mirrors it for W+A.
-Confirmation of the reported gameplay stop is pending.
+Diagonal rounding now preserves whichever movement axis was already held.
+W/S-first and A/D-first diagonals retain the same near-full stick strength.
+No movement smoothing or input delay is added. The raw mouse camera is unchanged.
+Confirmation of the horizontal-first gameplay correction is pending.
 
 GNU GPL v2 or later. See LICENSE, licenses\ and README.md for third-party credits.
 Not affiliated with Sony Interactive Entertainment or FromSoftware.

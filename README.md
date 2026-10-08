@@ -78,7 +78,8 @@ On **Controls**, click a binding and press the desired input. **+** adds an
 alternative; **Clear** removes bindings. Remaps apply at the next game launch.
 
 Keyboard movement uses symmetric diagonals within the circular stick range,
-including after rounding to the game's input format. Opposite movement keys cancel.
+including after rounding to the game's input format. Adding a strafe key preserves
+the held axis; opposite movement keys cancel.
 
 Mouse sensitivity and invert Y are available in the launcher and in-game menu.
 Opening the port menu, name entry or switching windows releases capture; lock-on

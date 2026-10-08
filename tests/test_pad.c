@@ -35,6 +35,68 @@ static void movement_keys(bool *keys, unsigned held) {
     keys[SDL_SCANCODE_D]=(held&8)!=0;
 }
 
+static PadData keyboard_movement_sample(bool *keys, unsigned held) {
+    movement_keys(keys,held);
+    PadData mapped={.left_x=128,.left_y=128,.right_x=17,.right_y=231};
+    apply_keyboard(&mapped,keys,0);
+    assert(mapped.right_x==17 && mapped.right_y==231);
+    return mapped;
+}
+
+static void check_movement_primary(PadData mapped, unsigned primary) {
+    const int dx=(int)mapped.left_x-128, dy=(int)mapped.left_y-128;
+    assert(dx*dx+dy*dy==90*90+91*91);
+    /* A diagonal must stay less than 45 degrees from the direction already
+     * held, for horizontal starts as well as vertical starts. */
+    if (primary&3) assert(abs(dy)==91 && abs(dx)==90);
+    else assert(abs(dx)==91 && abs(dy)==90);
+    if (primary==1) assert(dy<0);
+    if (primary==2) assert(dy>0);
+    if (primary==4) assert(dx<0);
+    if (primary==8) assert(dx>0);
+}
+
+static void test_keyboard_transition_order(void) {
+    bool keys[SDL_SCANCODE_COUNT]={0};
+    static const unsigned directions[]={1,2,4,8};
+    /* Eight ordered cardinal-to-diagonal transitions. Keep both held over
+     * repeated reads, release/re-add the first key, then reverse the secondary. */
+    for (unsigned p=0;p<4;++p) for (unsigned s=0;s<4;++s) {
+        const unsigned primary=directions[p], secondary=directions[s];
+        if (!!(primary&3)==!!(secondary&3)) continue;
+        keyboard_movement_sample(keys,0);
+        PadData cardinal=keyboard_movement_sample(keys,primary);
+        assert(cardinal.left_x==(primary==4 ? 0 : primary==8 ? 255 : 128));
+        assert(cardinal.left_y==(primary==1 ? 0 : primary==2 ? 255 : 128));
+        for (unsigned frame=0;frame<240;++frame)
+            check_movement_primary(keyboard_movement_sample(keys,primary|secondary),primary);
+        PadData again=keyboard_movement_sample(keys,primary);
+        assert(again.left_x==cardinal.left_x && again.left_y==cardinal.left_y);
+        check_movement_primary(keyboard_movement_sample(keys,primary|secondary),primary);
+        keyboard_movement_sample(keys,secondary);
+        for (unsigned frame=0;frame<240;++frame)
+            check_movement_primary(keyboard_movement_sample(keys,primary|secondary),secondary);
+        /* Reversing the secondary direction does not change the held primary. */
+        const unsigned opposite_primary=primary==1 ? 2 : primary==2 ? 1 : primary==4 ? 8 : 4;
+        check_movement_primary(keyboard_movement_sample(keys,opposite_primary|secondary),secondary);
+    }
+    /* Opposing keys cancel an axis. The remaining axis becomes primary. */
+    keyboard_movement_sample(keys,0);
+    keyboard_movement_sample(keys,4);
+    check_movement_primary(keyboard_movement_sample(keys,5),4);
+    PadData cancelled=keyboard_movement_sample(keys,13); /* A+D+W */
+    assert(cancelled.left_x==128 && cancelled.left_y==0);
+    check_movement_primary(keyboard_movement_sample(keys,5),1);
+    keyboard_movement_sample(keys,15);
+    check_movement_primary(keyboard_movement_sample(keys,5),1); /* simultaneous start */
+    keyboard_movement_sample(keys,0);
+    keyboard_movement_sample(keys,4);
+    check_movement_primary(keyboard_movement_sample(keys,5),4);
+    assert(pad_close(1)==0 && pad_open(1,0,0,NULL)==1);
+    check_movement_primary(keyboard_movement_sample(keys,5),1); /* new pad session */
+    keyboard_movement_sample(keys,0);
+}
+
 static void test_keyboard_movement(SDL_Joystick *joystick) {
     bool keys[SDL_SCANCODE_COUNT]={0};
     /* The report's W+D=(218,37) worked while W+A=(37,37) jerked. Preserve
@@ -79,8 +141,12 @@ static void test_keyboard_movement(SDL_Joystick *joystick) {
         assert(mapped.left_x==(transitions[n]==1 ? 128 : transitions[n]==5 ? 38 : 218));
     }
     /* Every possible physical axis pair mixed with each nonempty WASD state
-     * must remain bounded after integer conversion, including opposing keys. */
-    for (unsigned held=1;held<16;++held) {
+     * stays bounded for both vertical-first and horizontal-first histories. */
+    for (unsigned horizontal=0;horizontal<2;++horizontal) for (unsigned held=1;held<16;++held) {
+        const int key_x=((held&8)!=0)-((held&4)!=0), key_y=((held&2)!=0)-((held&1)!=0);
+        keyboard_movement_sample(keys,0);
+        if (key_x && key_y)
+            keyboard_movement_sample(keys,horizontal ? (key_x<0 ? 4 : 8) : (key_y<0 ? 1 : 2));
         movement_keys(keys,held);
         for (unsigned px=0;px<256;++px) for (unsigned py=0;py<256;++py) {
             PadData mapped={.left_x=(uint8_t)px,.left_y=(uint8_t)py,.right_x=17,.right_y=231};
@@ -216,6 +282,7 @@ int main(void) {
     assert(bindings[IN_CROSS].key_count==2 && bindings[IN_CROSS].keys[0]==SDL_SCANCODE_X &&
            bindings[IN_CROSS].keys[1]==SDL_SCANCODE_SPACE);
     test_keyboard_movement(joystick);
+    test_keyboard_transition_order();
     /* Capture-helper names round-trip through the actual INI parser and pad ABI. */
     FILE *mouse_config=fopen(config,"w");
     assert(mouse_config);
@@ -252,12 +319,30 @@ int main(void) {
     mapped=(PadData){.left_x=128,.left_y=128};
     apply_keyboard(&mapped,keyboard,SDL_BUTTON_LMASK);
     assert(mapped.left_x==218 && mapped.left_y==37);
+    /* Start with the remapped horizontal action, then add either the mouse-
+     * bound or keyboard-bound vertical action. The held action retains priority. */
+    mapped=(PadData){.left_x=128,.left_y=128};
+    apply_keyboard(&mapped,keyboard,0);
+    assert(mapped.left_x==255 && mapped.left_y==128);
+    mapped=(PadData){.left_x=128,.left_y=128};
+    apply_keyboard(&mapped,keyboard,SDL_BUTTON_LMASK);
+    assert(mapped.left_x==219 && mapped.left_y==38);
+    mapped=(PadData){.left_x=128,.left_y=128};
+    apply_keyboard(&mapped,keyboard,0);
+    keyboard[SDL_SCANCODE_T]=true;
+    mapped=(PadData){.left_x=128,.left_y=128};
+    apply_keyboard(&mapped,keyboard,0);
+    assert(mapped.left_x==219 && mapped.left_y==38);
     keyboard[SDL_SCANCODE_H]=false;
     mouse_buttons=SDL_BUTTON_RMASK;
     capture=1;
     assert(pad_read_state(1,&data)==0 && data.buttons==0 && data.r2==0);
     capture=0;
     mouse_buttons=0;
+    keyboard[SDL_SCANCODE_H]=true;
+    mapped=(PadData){.left_x=128,.left_y=128};
+    apply_keyboard(&mapped,keyboard,0);
+    assert(mapped.left_x==218 && mapped.left_y==37); /* menu capture cleared old priority */
     SDL_CloseJoystick(joystick);
     if (gamepad) SDL_CloseGamepad(gamepad);
     gamepad=NULL;
@@ -265,5 +350,5 @@ int main(void) {
     SDL_Quit();
     unlink(path);
     unlink(config);
-    puts("PASS: pad ABI, near-full keyboard diagonals, recorded W+D preservation, mirrored W+A, exhaustive mixed input, W/A/D transitions, opposing keys, native/remapped input, debug camera chord, left/right clicks, SDL touch coordinates, overlay capture, controls");
+    puts("PASS: pad ABI, near-full keyboard diagonals, all eight transition orders, stable held-axis priority, exhaustive mixed input in both orders, opposing keys, menu/session resets, native/remapped input, debug camera chord, left/right clicks, SDL touch coordinates, overlay capture, controls");
 }

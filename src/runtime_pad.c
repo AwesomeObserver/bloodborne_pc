@@ -268,15 +268,25 @@ static int pad_value(SDL_Gamepad *g, int input) {
 static uint8_t key_axis(uint8_t value, int negative, int positive) {
     return negative || positive ? (uint8_t)(128-(negative ? 128 : 0)+(positive ? 127 : 0)) : value;
 }
+/* Only resolved digital directions, updated under the pad lock. Retain the
+ * first held axis when a second is added; no timer or temporal filtering. */
+static struct { int x, y, horizontal; } key_movement_state;
+static void reset_key_movement(void) { memset(&key_movement_state,0,sizeof(key_movement_state)); }
+
 /* Use the nearest representable direction inside the final 8-bit stick circle.
- * Truncating both components loses strength and puts both forward diagonals
- * exactly at 45 degrees. Prefer the vertical component for equal-error choices:
- * W+D retains the known-working (218,37), with W+A mirrored to (38,37).
- * No temporal filtering; controller-only samples remain untouched. */
+ * Equal-error choices favor the already-held axis: vertical-first diagonals
+ * use (90,91), horizontal-first use (91,90). Both retain near-full strength
+ * and stay just below a 45-degree turn from their starting direction.
+ * Controller-only samples remain untouched. */
 static void key_movement(PadData *d, int left, int right, int up, int down) {
+    const int key_x=(right!=0)-(left!=0), key_y=(down!=0)-(up!=0);
+    if (!key_x || !key_y) key_movement_state.horizontal=key_x!=0;
+    else if (key_movement_state.horizontal ? key_x!=key_movement_state.x : key_y!=key_movement_state.y)
+        key_movement_state.horizontal=key_x==key_movement_state.x;
+    key_movement_state.x=key_x; key_movement_state.y=key_y;
     if (!(left || right || up || down)) return;
-    int x=left || right ? ((right!=0)-(left!=0))*128 : (int)d->left_x-128;
-    int y=up || down ? ((down!=0)-(up!=0))*128 : (int)d->left_y-128;
+    int x=left || right ? key_x*128 : (int)d->left_x-128;
+    int y=up || down ? key_y*128 : (int)d->left_y-128;
     const int length2=x*x+y*y;
     if (length2>128*128) {
         const float scale=128.0f/SDL_sqrtf((float)length2);
@@ -284,9 +294,10 @@ static void key_movement(PadData *d, int left, int right, int up, int down) {
         const int base_x=(int)target_x, base_y=(int)target_y;
         x=base_x; y=base_y;
         float error=(x-target_x)*(x-target_x)+(y-target_y)*(y-target_y);
-        /* Try vertical rounding first, so a diagonal tie consistently favors
-         * forward/backward movement. Check bounds after rounding, not before. */
-        for (unsigned round=1;round<4;++round) {
+        /* Round the held primary axis first, and keep that choice throughout
+         * the hold. Check bounds after rounding, not before. */
+        for (unsigned candidate=1;candidate<4;++candidate) {
+            const unsigned round=key_movement_state.horizontal && candidate<3 ? 3-candidate : candidate;
             const int cx=base_x+((round&2) ? (target_x<0 ? -1 : 1) : 0);
             const int cy=base_y+((round&1) ? (target_y<0 ? -1 : 1) : 0);
             if (cx*cx+cy*cy>128*128) continue;
@@ -319,7 +330,7 @@ static void sample_host(PadData *d) {
     d->timestamp=now_us();
     SDL_Gamepad *g=current_gamepad();
     if (!bindings_ready) { load_bindings(); bindings_ready=1; }
-    if (bbgpu_overlay_captures_input()) return; /* settings menu open: neutral input */
+    if (bbgpu_overlay_captures_input()) { reset_key_movement(); return; } /* settings menu open */
     const bool *k=SDL_WasInit(SDL_INIT_VIDEO) ? SDL_GetKeyboardState(NULL) : NULL;
     if (g) {
         int touch_right=0;
@@ -490,6 +501,7 @@ static void touch_ids(PadData *d) {
 static void sample(PadData *d) {
     sample_host(d);
     if (bbgpu_overlay_captures_input()) {
+        reset_key_movement();
         bbgpu_camera_pad(128,128,128,128,0);
         hold_after_capture=1; touch_ids(d); return;
     }
@@ -525,6 +537,7 @@ static ABI int32_t pad_open(int32_t user, int32_t type, int32_t index, const voi
     if (index) return ERR_INVALID_ARG;
     pthread_mutex_lock(&lock);
     int already=opened; opened=1;
+    if (!already) reset_key_movement();
     pthread_mutex_unlock(&lock);
     if (already) return ERR_ALREADY_OPENED;
     puts("Runtime: pad opened for user 1 (SDL gamepad or keyboard)");
@@ -532,7 +545,10 @@ static ABI int32_t pad_open(int32_t user, int32_t type, int32_t index, const voi
 }
 static ABI int32_t pad_close(int32_t handle) {
     if (handle!=PAD_HANDLE || !opened) return ERR_INVALID_HANDLE;
-    opened=0; return 0;
+    pthread_mutex_lock(&lock);
+    opened=0; reset_key_movement();
+    pthread_mutex_unlock(&lock);
+    return 0;
 }
 static ABI int32_t pad_read_state(int32_t handle, PadData *data) {
     if (handle!=PAD_HANDLE || !opened) return ERR_INVALID_HANDLE;

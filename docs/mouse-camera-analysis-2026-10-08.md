@@ -91,7 +91,7 @@ The capture does not show angle feedback or ownership changes causing the jerks.
 
 The original input values and the subsequent change were:
 
-| Input | Original report X/Y | Rejected change X/Y | Current X/Y |
+| Input | Original report X/Y | Rejected change X/Y | Commit 302e4db X/Y |
 | --- | --- | --- | --- |
 | W | 128 / 0 | 128 / 0 | 128 / 0 |
 | W+A | 37 / 37 | 38 / 38 | 38 / 37 |
@@ -113,9 +113,9 @@ was exactly 45 degrees. The captured routine does not include character animatio
 selection; an unstable movement-sector boundary at exactly 45 degrees is a
 hypothesis, not a verified game-code finding.
 
-## Current keyboard mapping and validation limits
+## Vertical-priority mapping and gameplay feedback
 
-The current mapping restores the W+D sample that the user reported as working and
+Commit `302e4db` restored the W+D sample that the user reported as working and
 mirrors it around neutral X=128 for W+A. Normalization considers the neighboring
 integer coordinates and selects the nearest candidate inside the radius-128
 circle. Equal-error choices prefer the vertical component. All keyboard diagonals
@@ -131,8 +131,39 @@ transitions, remapped keys/mouse buttons, physical controller passthrough and
 983040 mixed keyboard/controller states. This rejects both previous mappings.
 These checks validate delivered input, not character motion or animation.
 
-Gameplay confirmation is still required. If jerks remain, a V2 report should
-compare keyboard and physical-controller diagonals in the same open area, with
-F4 enabled and mouse ownership established before both cases. Keep the right
-stick neutral so it does not return rotation to the native camera. Private reports
-and captured game code are not distributed.
+The user confirmed smooth movement when starting with W or S and then adding
+A or D. Jerks remain in the reverse order: starting with A or D and adding W or S.
+A fixed vertical preference therefore handles only one starting axis. A vector
+with offsets `(90,91)` turns approximately 44.683 degrees from vertical but
+45.317 degrees from horizontal. The same rounding choice cannot favor both
+starting directions.
+
+## Held-axis preference and validation limits
+
+The mapping now remembers the resolved digital direction at each pad read.
+Adding an orthogonal direction retains the already-held axis as primary. That
+axis wins equal-error integer rounding choices, giving `(90,91)` offsets for a
+vertical start and `(91,90)` for a horizontal start. Both have squared magnitude
+16381 and turn approximately 44.683 degrees from their respective starting axis.
+Holding the combination does not alternate between the two vectors.
+
+Releasing or cancelling the primary direction transfers preference to the
+remaining axis. Releasing all movement actions, menu capture and a new pad session
+clear the state. If both axes first appear in the same pad read, the deterministic
+fallback remains vertical. This operates on resolved movement actions, including
+remapped keys and mouse buttons. It adds no timer, interpolation or input delay;
+raw mouse camera hooks and controller-only samples remain unchanged.
+
+The regression covers all eight ordered cardinal-to-diagonal transitions,
+240 consecutive held samples per order, releasing/re-adding the primary key,
+secondary reversal, opposite-key cancellation, remapped/mouse-bound actions and
+menu/pad-session resets. The old mapper fails the horizontal-first assertion.
+Exhaustive bounds checks cover 1966080 mixed keyboard/controller samples across
+both starting-axis histories. These checks validate input values and stability;
+they do not execute character animation or level physics.
+
+Gameplay confirmation of the horizontal-first correction is still required.
+If needed, a V2 report should include both key orders and physical-controller
+movement in the same open area, with F4 enabled and mouse ownership established
+before both cases. Keep the right stick neutral so it does not return rotation
+to the native camera. Private reports and captured game code are not distributed.

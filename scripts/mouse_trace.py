@@ -121,6 +121,7 @@ def main():
         if args.movement:
             print('After loading a character, enable F4 and move the mouse once to start recording.\n'
                   'In an open area: hold W for 3 seconds, W+A for 5 seconds, then W+D for 5 seconds.\n'
+                  'Also start with A or D, then add W or S and hold each combination for 3 seconds.\n'
                   'Repeat with the mouse moving. Disable F4 and repeat W, W+A and W+D.\n'
                   'For a controller comparison, enable F4 and move the mouse once, then repeat the directions with the left stick; keep the right stick neutral.\n'
                   'Close the game; the report ZIP will appear in logs. Recording is limited to 16384 camera updates.\n'
