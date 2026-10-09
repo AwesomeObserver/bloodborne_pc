@@ -23,11 +23,12 @@ MINGW*|MSYS*)
     cmake -S gpu -B out/gpu -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBB_PGO=off \
         -DBB_LTO="${BB_LTO:-OFF}" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ >/dev/null
     echo "GPU library and loader: LTO ${BB_LTO:-OFF}"
-    if ! ninja -C out/gpu bb-probe bb-gpu-capabilities bb-play bb-crash-monitor > out/gpu-build.log 2>&1; then
+    if ! ninja -C out/gpu bb-probe bb-gpu-capabilities bb-play bb-crash-monitor bb-remix-check > out/gpu-build.log 2>&1; then
         grep -v '^\[' out/gpu-build.log | tail -40 >&2
         echo 'Build failed (full log: out/gpu-build.log)' >&2; exit 1
     fi
     cp out/gpu/bb-probe.exe out/gpu/bb-gpu-capabilities.exe out/gpu/bb-play.exe out/gpu/bb-crash-monitor.exe out/
+    cp out/gpu/remix/bb-remix-check.exe out/
     echo "Built $PWD/out/bb-probe.exe"
     if [[ ${1:-} == --test ]]; then
         # Exercise the optional bridge in the renderer tests when it was built.

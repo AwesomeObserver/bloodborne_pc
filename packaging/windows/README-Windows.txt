@@ -42,6 +42,18 @@ Download FSR 4 assets is on Graphics. FSR 4.1.1 uses a prepared fsr4_411 folder,
 selected on Graphics or through BB_FSR411_DIR. Unsupported modes are unavailable
 or fall back to FSR 3.1.
 
+RTX REMIX SDK DEVELOPMENT
+
+The previous experimental custom path tracer was removed. Normal gameplay uses
+the Vulkan renderer. The official RTX Remix SDK backend is under development;
+playable Bloodborne path tracing is not yet available.
+
+Check RTX Remix SDK.cmd runs a synthetic scene and validates rendered pixels and
+shared Vulkan output in a separate process. It does not start the game. Install
+the pinned runtime with Bloodborne.exe --script scripts/install_remix.py if the
+remix-runtime-1.5.2 folder is missing. Reports appear under logs/remix-sdk-*.
+See docs/rtx-path-tracing-windows.md for current implementation and remaining work.
+
 CONTROLS
 
 F4          Toggle raw mouse camera

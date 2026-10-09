@@ -45,6 +45,9 @@ elseif (BB_PGO STREQUAL "use")
 endif()
 
 find_package(Vulkan REQUIRED)
+if (WIN32)
+    add_subdirectory(remix)
+endif()
 find_package(fmt REQUIRED)
 find_package(Boost REQUIRED)
 # bbport (Windows): MSYS2 has no magic_enum/miniz packages; the submodules are used instead.

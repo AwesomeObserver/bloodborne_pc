@@ -128,6 +128,7 @@ captures terminal Windows exceptions from a separate process and can reduce perf
 - [Vulkan command-data crash and missing dump fix](docs/crash-analysis-2026-10-09.md)
 - [Respawn loading fix and timing capture](docs/respawn-loading-windows.md)
 - [Windows performance audit, optimizations and measurements](docs/performance-windows.md)
+- [Official RTX Remix SDK backend and integration status](docs/rtx-path-tracing-windows.md)
 
 ## Credits & license
 
