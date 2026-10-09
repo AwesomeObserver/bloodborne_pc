@@ -120,21 +120,6 @@ Fatal GPU assertions also write a minidump before stopping with exit code 23.
 Their dump uses assertion marker 0xE0424201 and records the failing thread and
 reason. This marker identifies a deliberate assertion, not a CPU access violation.
 
-EXPERIMENTAL RTX
-
-Configure the game in Bloodborne.exe first. Play RTX Hybrid.cmd retains game
-lighting and adds traced indirect lighting and rough reflections. Play RTX.cmd
-replaces captured opaque lighting with a default environment/directional light.
-Normal launches use the standard renderer. Runtime capability checks provide
-raster fallback when native ray tracing is unavailable.
-
-GPU regression scenes pass; full game validation is pending. Off-screen geometry,
-exact game lights/materials, cutout opacity and indirect draws are incomplete.
-See docs/rtx-path-tracing-windows.md before testing.
-Trace RTX.cmd runs a GPU preflight and collects logs/rtx-trace-*.zip after exit.
-The report contains this session log, dumps if produced and binary fingerprints.
-It does not copy game files, saves or settings.
-
 HELP AND DOCUMENTATION
 
 Black screen: Advanced -> Clear shader cache, then relaunch.

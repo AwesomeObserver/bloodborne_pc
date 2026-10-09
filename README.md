@@ -46,7 +46,6 @@ Python installation is needed.
 | **Windows launcher** | **13 languages**, updates that preserve saves/settings/mods, direct shortcuts, shader-cache cleanup, session logs and local crash dumps. |
 | **Respawn loading** | Removes the original death-triggered **12-second minimum loading timer**, retaining resource and character readiness checks. |
 | **Launch & render caches** | Verified prepared-image reuse, shared shader-module reuse during preload and asynchronous cache writes without payload copies. |
-| **Experimental RTX** | Native hardware path tracing, multiple light bounces and rough reflections, with a separate hybrid launch. [Validation and current limits →](docs/rtx-path-tracing-windows.md) |
 
 Feature availability is checked at runtime. FSR 4 variants also need their matching
 shader assets. DLSS presets A–D are legacy requests that current DLLs may substitute;
@@ -102,9 +101,6 @@ uses the game's camera. [Mouse camera details →](docs/mouse-camera-windows.md)
   use **Apply and restart game**. Resolution and quality also need a restart when live
   resolution changes are disabled.
 - **Character creation preview can be empty.** The created character still appears in game.
-- **RTX is opt-in and experimental.** GPU test scenes pass; game lighting/material extraction
-  and off-screen geometry are incomplete. Gameplay validation is pending. Start with
-  **Play RTX Hybrid.cmd**; [setup and report capture](docs/rtx-path-tracing-windows.md).
 
 ## Saves & troubleshooting
 

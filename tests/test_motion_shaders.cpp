@@ -17,8 +17,6 @@ int main(int argc, char** argv) {
     MotionVectors::positions_address = 0x20000;
     for (bool vertex : {true, false}) {
         for (bool motion : {false, true}) {
-          for (bool ray : {false, true}) {
-            if (ray && !vertex) continue;
             Info info{};
             info.hw_stage = vertex ? HwStage::Vertex : HwStage::Fragment;
             info.sw_stage = vertex ? SwStage::Vertex : SwStage::Fragment;
@@ -26,8 +24,6 @@ int main(int argc, char** argv) {
             runtime.Initialize(info.hw_stage, info.sw_stage);
             if (vertex) {
                 runtime.hw.vs.motion_vectors = motion;
-                runtime.hw.vs.ray_params_address = ray ? 0x30000 : 0;
-                runtime.hw.vs.ray_positions_address = ray ? 0x40000 : 0;
             } else {
                 runtime.hw.fs.motion_vectors = motion;
                 runtime.hw.fs.color_buffers[0].num_format = AmdGpu::NumberFormat::Float;
@@ -57,11 +53,10 @@ int main(int argc, char** argv) {
             Backend::Bindings bindings{};
             const auto code = Backend::SPIRV::EmitSPIRV(profile, runtime, program, bindings);
             const auto path = dir / (std::string(vertex ? "vertex" : "fragment") +
-                                      (motion ? "-motion" : "-plain") + (ray ? "-ray.spv" : ".spv"));
+                                      (motion ? "-motion.spv" : "-plain.spv"));
             std::ofstream out(path, std::ios::binary);
             out.write(reinterpret_cast<const char*>(code.data()), code.size() * sizeof(u32));
             if (!out) { return 1; }
-          }
         }
     }
 }

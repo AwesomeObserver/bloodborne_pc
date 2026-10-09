@@ -15,7 +15,6 @@
 #include "video_core/renderer_vulkan/vk_breadcrumbs.h"
 #include "bbport_toggles.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
-#include "video_core/renderer_vulkan/ray_geometry.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 
 #include <vk_mem_alloc.h>
@@ -231,8 +230,7 @@ bool Instance::CreateDevice() {
         vk::PhysicalDeviceImage2DViewOf3DFeaturesEXT, vk::PhysicalDeviceShaderClockFeaturesKHR,
         vk::PhysicalDeviceComputeShaderDerivativesFeaturesKHR,
         vk::PhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE,
-        vk::PhysicalDeviceCooperativeMatrixFeaturesKHR, vk::PhysicalDeviceShaderFloat8FeaturesEXT,
-        vk::PhysicalDeviceAccelerationStructureFeaturesKHR, vk::PhysicalDeviceRayQueryFeaturesKHR>();
+        vk::PhysicalDeviceCooperativeMatrixFeaturesKHR, vk::PhysicalDeviceShaderFloat8FeaturesEXT>();
     features = feature_chain.get().features;
 
     const vk::StructureChain properties_chain = physical_device.getProperties2<
@@ -285,21 +283,6 @@ bool Instance::CreateDevice() {
     ASSERT_MSG(robustness2_features.nullDescriptor,
                "Required Vulkan feature unavailable: nullDescriptor");
 
-    // Ray queries need an acceleration structure, BDA and vertex stores for scene capture.
-    if (RayGeometry::Requested()) {
-        const auto rt = feature_chain.get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>();
-        const auto rq = feature_chain.get<vk::PhysicalDeviceRayQueryFeaturesKHR>();
-        const auto has = [&](const char* x) { return std::ranges::find(available_extensions, x) != available_extensions.end(); };
-        ray_query_enabled = rt.accelerationStructure && rq.rayQuery && features.vertexPipelineStoresAndAtomics &&
-            features.shaderInt64 && feature_chain.get<vk::PhysicalDeviceVulkan12Features>().bufferDeviceAddress &&
-            has(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) && has(VK_KHR_RAY_QUERY_EXTENSION_NAME) &&
-            has(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
-        if (ray_query_enabled) {
-            add_extension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
-            add_extension(VK_KHR_RAY_QUERY_EXTENSION_NAME);
-            add_extension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
-        } else std::puts("RTX path tracing unavailable: required Vulkan ray-query/capture features missing; raster fallback");
-    }
     // Optional
     maintenance_5 = add_extension(VK_KHR_MAINTENANCE_5_EXTENSION_NAME);
     maintenance_8 = add_extension(VK_KHR_MAINTENANCE_8_EXTENSION_NAME);
@@ -641,18 +624,12 @@ bool Instance::CreateDevice() {
         vk::PhysicalDeviceCooperativeMatrixFeaturesKHR{
             .cooperativeMatrix = true,
         },
-        vk::PhysicalDeviceAccelerationStructureFeaturesKHR{.accelerationStructure = true},
-        vk::PhysicalDeviceRayQueryFeaturesKHR{.rayQuery = true},
         vk::PhysicalDeviceShaderFloat8FeaturesEXT{
             .shaderFloat8 = true,
             .shaderFloat8CooperativeMatrix = true,
         },
     };
 
-    if (!ray_query_enabled) {
-        device_chain.unlink<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>();
-        device_chain.unlink<vk::PhysicalDeviceRayQueryFeaturesKHR>();
-    }
     if (!custom_border_color) {
         device_chain.unlink<vk::PhysicalDeviceCustomBorderColorFeaturesEXT>();
     }

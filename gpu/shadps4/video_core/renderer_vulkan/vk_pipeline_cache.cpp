@@ -23,7 +23,6 @@
 #include "video_core/cache_storage.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/motion_history.h"
-#include "video_core/renderer_vulkan/ray_geometry.h"
 #include "video_core/renderer_vulkan/vk_draw_prep.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_serialization.h"
@@ -173,8 +172,6 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(PipelineSelection& se
             regs.clipper_control.clip_space == AmdGpu::ClipSpace::MinusWToW;
         info.hw.vs.clip_disable = regs.IsClipDisabled();
         info.hw.vs.motion_vectors = sel.motion;
-        info.hw.vs.ray_params_address = sel.ray_capture ? RayGeometry::params_address : 0;
-        info.hw.vs.ray_positions_address = sel.ray_capture ? RayGeometry::positions_address : 0;
         break;
     }
     case HwStage::Fragment: {
@@ -522,14 +519,6 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
                           regs.stage_enable.raw == AmdGpu::ShaderStageEnable::VgtStages::Vs;
     }
     sel.motion = false;
-    u32 ray_bound = 0;
-    for (s32 cb = 0; cb < AmdGpu::NUM_COLOR_BUFFERS && !skip_cb_binding; ++cb)
-        ray_bound += (regs.color_buffers[cb] && regs.color_target_mask.GetMask(cb)) ? 1 : 0;
-    sel.ray_capture = RayGeometry::params_address != 0 && ray_bound >= 5 &&
-        regs.depth_buffer.DepthValid() && regs.depth_buffer.NumSamples() == 1 &&
-        !regs.IsClipDisabled() &&
-        regs.stage_enable.raw == AmdGpu::ShaderStageEnable::VgtStages::Vs;
-    key.ray_geometry = sel.ray_capture;
 
     // First pass to fill render target information needed by shader recompiler
     for (s32 cb = 0; cb < AmdGpu::NUM_COLOR_BUFFERS && !skip_cb_binding; ++cb) {

@@ -1,114 +1,91 @@
-# Experimental native RTX path tracing — Windows v2
+# RTX path tracing: integration investigation
 
-The port now includes an opt-in hardware path tracer in its own Vulkan renderer.
-It runs before the game's post-processing and HUD. **GPU regression scenes pass;
-full Bloodborne gameplay and image-quality validation are pending.**
+Status as of **2026-10-09**: **not implemented in the game renderer**. There is no
+playable Bloodborne RTX build from this investigation. The standalone Remix API
+test described below does not establish game compatibility, image quality or FPS.
 
-## Start
+## What the linked demonstration establishes
 
-1. Configure the game and graphics in `Bloodborne.exe` once, then close the launcher.
-2. Start **Play RTX Hybrid.cmd** to retain the game's lighting and add traced indirect
-   lighting and rough reflections. This is the recommended first comparison.
-3. Start **Play RTX.cmd** to replace captured opaque surfaces' lighting with the path
-   tracer's experimental environment and directional light.
-4. Start normally with `Bloodborne.exe` to use the standard renderer again.
+The [linked report](https://en.gamegpu.com/news/igry/bloodborne-zapustili-na-pk-s-trassirovkoj-putej-pri-pomoshchi-rtx-remix-i-shadps4)
+describes a prototype which converts static world geometry into Remix assets and
+streams dynamic geometry from the running game. It does not supply an integration
+patch or a playable release. No public Bloodborne implementation was found during
+this investigation; that is a search result, not proof that one cannot exist.
 
-Ray-query and capture capabilities are checked at startup. Unsupported devices or
-failed RTX resource initialization keep the raster renderer. There is no extra
-Remix DLL to install. The launch log distinguishes `RTX path tracing ready` from
-`RTX path tracing active`: only the latter confirms that a game scene was traced.
+The [official Remix SDK](https://github.com/NVIDIAGameWorks/dxvk-remix/blob/main/documentation/RemixSDK.md)
+provides direct scene submission in a 64-bit application: materials, meshes,
+lights, camera, instances and presentation. It does not require translating every
+Bloodborne draw into Direct3D 9 fixed-function commands. The native game execution
+in this port can remain in place while a separate scene adapter feeds Remix.
 
-**Trace RTX.cmd** first runs a small GPU preflight, then launches the game in hybrid
-mode and collects `logs/rtx-trace-*.zip` when it exits. The report includes this
-session's output, native crash dumps if produced, and executable fingerprints.
-It does not copy game files, saves or settings. Send this ZIP with screenshots and
-reproduction steps if the game has no visible change, incorrect lighting or crashes.
-The preflight checks the GPU implementation; it cannot verify the game's scene hook.
+## Renderer audit
 
-## Implementation
+| Area | Existing code | Missing work |
+| :--- | :--- | :--- |
+| Camera | `CameraMotion::OnConstants` and `FrameCamera` in `gpu/shadps4/video_core/renderer_vulkan/vk_camera_motion.cpp` expose scene camera data. | Validate coordinate conventions, projection, jitter and camera cuts against the reconstructed scene. |
+| Draws | `vk_rasterizer.cpp` resolves vertex streams, indices and resource bindings. | Recover mesh attributes, transforms, instances, deformation and stable object identity. Bound buffers are not a complete world-space scene. |
+| Motion | `vk_object_motion.cpp` and `emit_spirv_special.cpp` store clip positions for selected G-buffer draws. | Full geometry capture cannot use this unchanged: it is gated on animation/palette changes and has no mesh materials or light definitions. |
+| Static world | Game assets are prepared for the original raster renderer. | Convert map placements, meshes and materials once, retaining geometry outside the current view for secondary rays and shadows. |
+| Materials and lights | Raster shaders consume cached textures and game constants. | Identify albedo, normals, roughness, opacity, emissive surfaces, light positions, intensity and scene lighting. Rendered color is not a substitute for these inputs. |
+| GPU ownership | The port owns its Vulkan device and scheduler; Remix creates its own renderer. | Establish output and synchronization interop, or change presentation ownership. Remix's raw `VkImage`/semaphore handles cannot simply be used as resources of our device. |
+| UI and temporal rendering | Scene composition, upscaling and frame generation already exist. | Preserve menus/HUD and choose one owner for jitter, denoising, upscaling and generated-frame presentation. Validate resize, loading and controller/overlay input. |
 
-- The vertex shader captures world-space positions **after the game's skinning and
-  model transforms**, using buffer device addresses. Indices are copied when the
-  draw is processed; no guest-memory pointer is retained for deferred recording.
-- A bounded triangle list builds a BLAS and TLAS on the same Vulkan device and queue
-  as the raster renderer. There is no per-frame geometry readback or cross-device
-  frame transfer.
-- Compute ray queries evaluate multiple light bounces, occlusion and a diffuse/GGX
-  reflection mixture. Hybrid mode retains the game's direct lighting; replacement
-  mode uses a default environment and directional light.
-- Depth-aware spatial filtering and motion-vector reprojection reduce noise.
-  History stores linear view depth, avoiding half-float precision loss near device
-  depth 1. History resets after missing frames, resolution changes and large camera
-  translations.
-- The result goes back into HDR scene color before post-processing. The game's
-  tone mapping and HUD continue afterward. Reduced scene targets are processed at
-  their actual size, without resolving all inputs to full size first.
-- Capture parameter rings wait for their own completed submission before reuse.
-  New image resources are retired through the scheduler on resize. Address-bearing
-  vertex shader variants are rebuilt each session rather than loaded with stale
-  device addresses from the cache.
+The current `vk_instance.cpp` does not enable acceleration structures or ray-tracing
+pipelines for the port's own device. A native Vulkan path tracer is a separate
+alternative to using Remix; adding those extensions alone would not produce a
+path-traced game scene.
 
-## Current limits
+## Standalone runtime check
 
-This is **an experimental native implementation**, separate from the RTX Remix /
-shadPS4 demonstration described in the
-[original report](https://en.gamegpu.com/news/igry/bloodborne-zapustili-na-pk-s-trassirovkoj-putej-pri-pomoshchi-rtx-remix-i-shadps4).
-The demonstration's Bloodborne adapter and converted scene assets are not bundled.
+The official [RTX Remix 1.5.2 release](https://github.com/NVIDIAGameWorks/rtx-remix/releases/tag/remix-1.5.2)
+was downloaded and checked locally. Its release archive SHA-256 is:
 
-Only eligible direct triangle-list G-buffer draws submitted in the current frame
-are captured. Off-screen map geometry is not retained, so secondary-ray occlusion
-and reflections can miss objects outside the raster view. Indirect, tessellated,
-alpha-cutout and transparent geometry do not yet have complete tracing support.
-Visible material color is recovered from the albedo/depth buffers; hidden surfaces
-use a neutral fallback, face normals and a shared roughness. Exact game light,
-normal-map, emissive, metallic and opacity extraction remain to be implemented.
-Replacement mode therefore changes the art lighting substantially.
+```
+cc424be4dd1a0c6fd922bc6a7f8e5f6582baea7043a38afa6686d8b6faabad01
+```
 
-Pixels without a usable captured surface retain raster color. Menus and loading
-frames retain the standard rendering path. DLSS/FSR reconstruction and generated
-frames remain downstream; their combination with RTX still needs gameplay testing.
-A small ray budget and the current denoiser can produce noise or ghosting. No
-frame-rate, image-quality or all-location stability guarantee is implied.
+The matching SDK was taken from the release's pinned runtime commit
+`b81a7b566b1eeb9edb4dc2b3c9d3972e0f253ad4`, API **0.6.4**. Its
+[C example](https://github.com/NVIDIAGameWorks/dxvk-remix/blob/b81a7b566b1eeb9edb4dc2b3c9d3972e0f253ad4/tests/rtx/apps/RemixAPI_C/remixapi_example_c.c)
+was compiled as a standalone Windows x64 executable with a hidden 640x360 window
+and checks on initialization, camera, instance, light and presentation results.
+It loaded the **64-bit `.trex/d3d9.dll`**, rather than the release's 32-bit bridge.
+No development Python or compiler directory was supplied in its runtime PATH.
 
-The complete game assets are unavailable in the development environment. Remote
-playtesting is required to confirm the G-buffer selection, scene dispatch trigger,
-world-space alignment, animated characters, HUD, location transitions and respawns.
+- 20 submitted frames: all checked calls returned success; process exit code 0.
+- A second run of 3 submitted frames also passed.
+- A third run of 60 submitted frames passed, including checked mesh/light
+  destruction and shutdown.
+- Runtime logs selected Trace Ray for indirect integration and Ray Query for
+  G-buffer/direct integration.
+- No rendered-pixel comparison or performance benchmark was performed. The
+  example also logged an error about common device objects during shutdown.
+  Explicitly destroying its mesh and light before shutdown did not eliminate the
+  error. Resource teardown still needs investigation before integrating this
+  runtime.
 
-## Options
+Research binaries, headers, archives and logs are local under
+`out/rtx-remix-research/`. They are not packaged with the port. No game-renderer or
+launcher setting was changed and no RTX feature is advertised by this test.
 
-Set these environment variables before launching; RTX itself requires a restart.
-The CMD launchers enable RTX for that process only.
+## Required next steps
 
-| Variable | Default | Range / purpose |
-| --- | --- | --- |
-| `BB_RTX_PATH_TRACE` | off | `1` enables native ray tracing |
-| `BB_RTX_MODE` | `1` | `1`: replace lighting; `2`: hybrid indirect |
-| `BB_RTX_SAMPLES` | `1` | 1–4 samples per pixel; more samples cost more time |
-| `BB_RTX_BOUNCES` | `3` | 1–6 surface interactions; indirect light needs at least 2 |
-| `BB_RTX_MAX_VERTICES` | `1048576` | 32–4194304 captured vertices per frame |
-| `BB_RTX_MAX_INDICES` | `3145728` | 96–12582912 indices per frame; three per triangle |
+1. Obtain a complete supported CUSA03173 1.09 game dump locally. The supplied
+   `eboot.bin` cannot provide maps, meshes and textures; the user confirmed that
+   the full dump is currently unavailable here.
+2. Reconstruct one real location with its static geometry and lighting; align it
+   with the live game camera and preserve the HUD.
+3. Stream the player, enemies and animated objects with stable identities, correct
+   skinning, transparency and resource lifetime management.
+4. Integrate presentation and temporal rendering, then test location changes,
+   death/respawn, cutscenes, menus, resizing and device/resource failures.
+5. Measure CPU submission, uploads, acceleration-structure work, ray dispatch,
+   denoising, memory use and loading. Cache unchanged meshes/materials, retain
+   static scene resources, reuse frame resources and avoid per-frame CPU
+   readbacks or global GPU waits. These are implementation goals, not measured
+   improvements.
 
-Captures beyond the geometry or per-frame parameter budget are skipped safely.
-The active-scene log reports draw/triangle/skip counts and the selected ray budget.
-First launch after this update recompiles shader caches with the new format.
-
-## Verification
-
-`path-tracer-test` executes the production acceleration-structure construction,
-ray-query and denoising shaders on a GPU and reads their pixels back. It checks
-light blocking by geometry outside the primary view, additional-bounce lighting,
-background/alpha preservation, invalid input fallback, repeated ring reuse,
-resolution changes and hybrid composition. It also runs with asynchronous command
-recording/submission and an intentionally unaligned requested index capacity.
-`path-tracer-disabled-test` checks that a normal launch enables no ray-query device
-feature and publishes no capture addresses.
-
-`ray-capture-test` runs the actual recompiler's vertex epilogue on a GPU. It checks
-world-space reconstruction, instancing, negative indexed base vertices, packed
-parameter halves, disabled and out-of-range writes. CPU checks cover camera matrix
-round trips with both viewport signs and bounded index expansion. Six ordinary,
-object-motion and ray-capture SPIR-V variants pass `spirv-val --target-env vulkan1.3`.
-
-These are synthetic tests. They do not substitute for running the full game.
-The Vulkan validation layer is not installed in the local environment; the local
-GPU tests must not be described as a validation-layer pass.
+An independently developed adapter can use the public SDK if the demonstration's
+source remains unavailable. A working test scene is a prerequisite, but only real
+gameplay and image validation can establish a working Bloodborne path-tracing
+feature. No frame-rate or stability guarantee follows from the SDK smoke test.

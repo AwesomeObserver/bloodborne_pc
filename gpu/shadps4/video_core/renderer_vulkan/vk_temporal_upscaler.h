@@ -38,7 +38,6 @@ class Scheduler;
 class Runtime;
 class CameraMotion;
 class SceneTargets;
-class PathTracer;
 
 /// bbport BB_FINAL_DUMP_TRIGGER: the frame as presented (after FSR and post processing) is saved
 /// as final_<w>x<h> in BB_DUMP_DIR when the trigger file exists (consumed). `image` in General.
@@ -69,7 +68,6 @@ public:
 
     /// Before a compute dispatch: the post-processing combine shader triggers the upscale.
     void OnDispatch(u64 cs_hash);
-    void SetPathTracer(PathTracer* tracer) { path_tracer = tracer; }
 
     /// Start of a frame in the command stream (display pass).
     bool OnFrameStart();
@@ -217,8 +215,6 @@ private:
     u64 trigger_hash = 0x9a9cf8a9;
     VideoCore::ImageId scene_color{};
     bool done_this_frame = false;
-    PathTracer* path_tracer = nullptr;
-    bool ray_done_this_frame = false;
     u32 preset_file_frames = 0; ///< BB_PRESET_FILE polling
     int applied_output = -1;
     bool snapshot_taken = false;

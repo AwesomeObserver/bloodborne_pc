@@ -484,7 +484,6 @@ SceneTargets::Target SceneTargets::Read(VideoCore::ImageId id,
     auto& original = *lookup(id, 0);
     auto& e = Get(id);
     Transition(e, original.aspect_mask, vk::ImageLayout::eGeneral, stages, access);
-    if (access & vk::AccessFlagBits2::eShaderWrite) e.state.ProxyWrite();
     return {e.image, View(e, original, info), e.layout, e.image.image_ci.usage};
 }
 } // namespace Vulkan
