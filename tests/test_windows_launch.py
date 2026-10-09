@@ -16,6 +16,36 @@ spec.loader.exec_module(runner)
 
 
 class WindowsLaunchTests(unittest.TestCase):
+    def test_remix_launch_bypasses_game_reconstruction_and_resolution_patches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            data=Path(directory); game=data/'game'; game.mkdir()
+            (game/'eboot.bin').touch(); probe=data/'bb-probe.exe'; probe.touch()
+            config=data/'bbport.ini'; original='upscaler=dlss\npreset=3\nframe_generation=dlss\noutput_res=2560x1440\n'
+            config.write_text(original)
+            env=dict(BB_RTX_REMIX='1',BB_GAME_DIR=str(game),BB_DATA_DIR=str(data),
+                     BB_CONFIG=str(config),BB_PROBE=str(probe),BB_HDR='1',BB_RENDER_RES='1280x720')
+            calls=[]
+            def script(name,*args,capture=False):
+                calls.append((name,args)); return str(game) if name=='mods.py' else ''
+            def launch(*args):
+                self.assertEqual(os.environ['BB_HDR'],'0')
+                self.assertEqual(os.environ['BB_UPSCALER'],'none')
+                self.assertEqual(os.environ['BB_FRAME_GENERATION'],'off')
+                self.assertNotIn('BB_RENDER_RES',os.environ)
+                self.assertNotIn('BB_OUTPUT_RES',os.environ)
+                self.assertEqual(config.read_text(),original)
+                return 0
+            previous=Path.cwd()
+            try:
+                with patch.dict(os.environ,env,clear=True),patch.object(runner,'PORT',data), \
+                     patch.object(runner.sys,'argv',[str(ROOT/'run.py')]), \
+                     patch.object(runner,'run_script',side_effect=script), \
+                     patch('prepare_cache.prepare_game',return_value=True), \
+                     patch.object(runner,'launch_probe',side_effect=launch):
+                    self.assertEqual(runner.main(),0)
+            finally: os.chdir(previous)
+            self.assertFalse(any('--print-scaled' in args for name,args in calls if name=='patches.py'))
+
     def test_script_capture_decodes_utf8_paths(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

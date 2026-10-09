@@ -30,6 +30,7 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
+#include "video_core/renderer_vulkan/vk_remix_scene.h"
 #include "video_core/renderer_vulkan/vk_gpu_profiler.h"
 #include "bbport_threads.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
@@ -69,6 +70,14 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
     camera_motion->SetObjectMotion(object_motion.get());
     upscaler = std::make_unique<TemporalUpscaler>(instance, scheduler, texture_cache, runtime,
                                                   *camera_motion, *scene_targets);
+#ifdef _WIN32
+    remix_scene = std::make_unique<RemixScene>(instance, scheduler, runtime, texture_cache);
+    if (remix_scene->Enabled()) {
+        upscaler->SetSceneRenderer([this](vk::Image target, u32 width, u32 height) {
+            return remix_scene->Compose(target, width, height);
+        });
+    }
+#endif
     if (!EmulatorSettings.IsNullGPU()) {
         liverpool->BindRasterizer(this);
     }
@@ -1450,6 +1459,9 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
         FrameCapture::IsDisplayBuffer(regs.color_buffers[0].Address())) {
         scene_started = false;
         camera_motion->OnDisplayPass(cb_descs[0].first);
+#ifdef _WIN32
+        remix_scene->OnFrameStart();
+#endif
         if (upscaler->OnFrameStart()) {
             object_motion->InvalidateHistory();
             camera_motion->InvalidateHistory();
@@ -1600,6 +1612,9 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
         (regs.num_indices > 6 || regs.num_instances.NumInstances() > 1)) {
         draw_jitter = upscaler->Jitter();
     }
+#ifdef _WIN32
+    const auto remix_capture = remix_scene->Capture(pipeline, regs, motion_geometry, index_offset);
+#endif
     UpdateDynamicState(pipeline, is_indexed);
     MarkPass(pipeline, state);
     scheduler.BeginRendering(state);
@@ -1622,11 +1637,21 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     };
     scheduler.RecordCrumb(crumb, [=](vk::CommandBuffer cmdbuf) {
         cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, handle);
+#ifdef _WIN32
+        if (remix_capture.buffer) {
+            cmdbuf.bindTransformFeedbackBuffersEXT(0, 1, &remix_capture.buffer,
+                                                   &remix_capture.offset, &remix_capture.size);
+            cmdbuf.beginTransformFeedbackEXT(0, 0, nullptr, nullptr);
+        }
+#endif
         if (is_indexed) {
             cmdbuf.drawIndexed(num_indices, num_instances, 0, s32(first_vertex), first_instance);
         } else {
             cmdbuf.draw(num_indices, num_instances, first_vertex, first_instance);
         }
+#ifdef _WIN32
+        if (remix_capture.buffer) cmdbuf.endTransformFeedbackEXT(0, 0, nullptr, nullptr);
+#endif
     });
     if (FrameCapture::Active()) {
         const auto* ps = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
@@ -2312,7 +2337,7 @@ void Rasterizer::ResolveVertexBuffers(const GraphicsPipeline* pipeline,
         // If there are no bindings, there is nothing further to do.
         return;
     }
-    if (motion_draw && !guest_buffers.empty()) {
+    if ((motion_draw || pipeline->GetGraphicsKey().remix_capture) && !guest_buffers.empty()) {
         // Include every stream: identical position buffers can be paired with different
         // skinning/instance data. Index topology and base offsets are matched separately.
         motion_geometry = ready ? ready->buffers_hash
@@ -2670,6 +2695,9 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                 if (ring->size == 864 && gbuffer_draw &&
                     memory->IsValidGpuMapping(ring->address, 0)) {
                     camera_motion->OnConstants(reinterpret_cast<const float*>(ring->address));
+#ifdef _WIN32
+                    remix_scene->OnConstants(reinterpret_cast<const float*>(ring->address));
+#endif
                 }
                 push_data.AddOffset(binding.buffer, 0);
             }
@@ -2731,6 +2759,9 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
             if (vsharp.GetSize() == 864 && gbuffer_draw &&
                 memory->IsValidGpuMapping(vsharp.base_address, 0)) {
                 camera_motion->OnConstants(reinterpret_cast<const float*>(vsharp.base_address));
+#ifdef _WIN32
+                remix_scene->OnConstants(reinterpret_cast<const float*>(vsharp.base_address));
+#endif
             }
             // Object motion research: the vertex shader buffers of G-buffer draws.
             if (FrameCapture::Active() && gbuffer_draw && stage.sw_stage == Shader::SwStage::Vertex &&

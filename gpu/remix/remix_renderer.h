@@ -26,7 +26,7 @@ public:
   static remixapi_MaterialInfo MaterialDefaults(uint64_t id);
 
   bool Initialize(const std::filesystem::path &runtime_dll, uint32_t width,
-                  uint32_t height);
+                  uint32_t height, std::array<uint8_t, 8> adapter = {});
   bool
   Resize(uint32_t width,
          uint32_t height); // consumer must release its imported image first

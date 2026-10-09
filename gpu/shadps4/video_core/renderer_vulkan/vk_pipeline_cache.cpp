@@ -172,6 +172,8 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(PipelineSelection& se
             regs.clipper_control.clip_space == AmdGpu::ClipSpace::MinusWToW;
         info.hw.vs.clip_disable = regs.IsClipDisabled();
         info.hw.vs.motion_vectors = sel.motion;
+        info.hw.vs.remix_capture = sel.remix_capture;
+        info.hw.vs.remix_uv = sel.remix_uv;
         break;
     }
     case HwStage::Fragment: {
@@ -507,6 +509,8 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
     // Only potentially animated G-buffer draws may use the extra motion attachment. The
     // ordinary stage variant is needed first to inspect the vertex shader's resources.
     bool motion_possible = false;
+    sel.remix_capture = false;
+    sel.remix_uv = 0xffff;
     {
         u32 bound = 0;
         for (s32 cb = 0; cb < AmdGpu::NUM_COLOR_BUFFERS && !skip_cb_binding; ++cb) {
@@ -549,6 +553,31 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
     if (!RefreshGraphicsStages(sel)) {
         return false;
     }
+
+    if (Shader::RemixCapture::enabled && regs.depth_buffer.DepthValid() &&
+        !regs.IsClipDisabled() && std::popcount(key.mrt_mask) >= 5 &&
+        regs.stage_enable.raw == AmdGpu::ShaderStageEnable::VgtStages::Vs) {
+        const auto* vs = sel.infos[u32(Shader::SwStage::Vertex)];
+        const auto* ps = sel.infos[u32(Shader::SwStage::Fragment)];
+        if (vs && ps && !vs->stores.GetAny(Shader::IR::Attribute::ClipDistance) &&
+            !vs->stores.GetAny(Shader::IR::Attribute::Param0 + Shader::RemixCapture::UvLocation)) {
+            sel.remix_capture = true;
+            // Prefer actual sRGB albedo sampling, and retain the vertex varying it uses.
+            for (const auto& image : ps->images) {
+                if (image.remix_uv == 0xffff || image.is_depth || image.is_written) continue;
+                const auto sharp = image.GetSharp(*ps);
+                if (sharp.GetNumberFmt() != AmdGpu::NumberFormat::Srgb ||
+                    sharp.GetType() != AmdGpu::ImageType::Color2D) continue;
+                const u32 input = image.remix_uv / 4;
+                if (input >= regs.num_interp || regs.ps_inputs[input].use_default) continue;
+                sel.remix_uv = u16(regs.ps_inputs[input].input_offset * 4 + image.remix_uv % 4);
+                break;
+            }
+            if (!RefreshGraphicsStages(sel)) return false;
+        }
+    }
+    key.remix_capture = sel.remix_capture;
+    key.remix_uv = sel.remix_uv;
     if (motion_possible) {
         const auto* vs = sel.infos[static_cast<u32>(Shader::SwStage::Vertex)];
         if (vs) {

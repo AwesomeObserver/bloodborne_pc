@@ -48,20 +48,19 @@ cp launcher/bloodborne.ico launcher/bloodborne.png "$dest/launcher/"
 for exe in bb-probe.exe bb-gpu-capabilities.exe bb-crash-monitor.exe; do
     llvm-strip --strip-debug -o "$dest/bin/$exe" "out/$exe"
 done
-if [[ -f out/bb-remix-check.exe ]]; then
-    llvm-strip --strip-debug -o "$dest/bin/bb-remix-check.exe" out/bb-remix-check.exe
-    cp "packaging/windows/Check RTX Remix SDK.cmd" "$dest/"
+if [[ -f out/bb-remix-host.exe ]]; then
+    llvm-strip --strip-debug -o "$dest/bin/bb-remix-host.exe" out/bb-remix-host.exe
     mkdir -p "$dest/licenses"
     cp gpu/remix/LICENSE.txt "$dest/licenses/RTX-Remix-SDK-LICENSE.txt"
 fi
 # Every DLL the executables load from the CLANG64 tree (SDL3, FFmpeg, Vulkan loader, ...).
 runtime_bins=("$dest/bin/bb-probe.exe" "$dest/bin/bb-gpu-capabilities.exe" "$dest/bin/bb-crash-monitor.exe")
-[[ ! -f "$dest/bin/bb-remix-check.exe" ]] || runtime_bins+=("$dest/bin/bb-remix-check.exe")
+[[ ! -f "$dest/bin/bb-remix-host.exe" ]] || runtime_bins+=("$dest/bin/bb-remix-host.exe")
 ldd "${runtime_bins[@]}" |
     awk '/\/clang64\/bin\// {print $3}' | sort -u | while read -r dll; do
         cp -u "$dll" "$dest/bin/"
     done
-cp -r scripts patches "$dest/"
+cp -r scripts patches docs "$dest/"
 cp run.py LICENSE VERSION.txt README.md packaging/windows/README-Windows.txt "$dest/"
 cp "packaging/windows/Trace Mouse Camera.cmd" "$dest/"
 cp "packaging/windows/Trace Keyboard Movement.cmd" "$dest/"

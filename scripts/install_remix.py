@@ -100,7 +100,7 @@ def install(target, archive=None):
         (staging / 'sdk-runtime.json').write_text(json.dumps(metadata, indent=2) + '\n', encoding='utf-8')
         staging.rename(target)
     print(f'Official RTX Remix {VERSION} installed: {target}', flush=True)
-    print('SDK backend installed. Bloodborne scene integration is still under development.', flush=True)
+    print('Select Graphics > Renderer > RTX Remix (experimental) in the launcher, then restart the game.', flush=True)
     return target
 
 

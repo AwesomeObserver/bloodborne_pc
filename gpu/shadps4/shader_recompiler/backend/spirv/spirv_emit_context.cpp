@@ -650,6 +650,18 @@ void EmitContext::DefineOutputs() {
                 Name(motion_out_cur, "motion_cur");
                 Name(motion_out_prev, "motion_prev");
             }
+            if (VertexRemix()) {
+                // EXT_transform_feedback writes ONLY the buffer range supplied by the
+                // draw recorder. Unlike BDA stores, shader output cannot escape it.
+                Decorate(output_position, spv::Decoration::XfbBuffer, 0u);
+                Decorate(output_position, spv::Decoration::Offset, 0u);
+                Decorate(output_position, spv::Decoration::XfbStride, 32u);
+                remix_uv_out = DefineOutput(F32[4], RemixCapture::UvLocation);
+                Decorate(remix_uv_out, spv::Decoration::XfbBuffer, 0u);
+                Decorate(remix_uv_out, spv::Decoration::Offset, 16u);
+                Decorate(remix_uv_out, spv::Decoration::XfbStride, 32u);
+                Name(remix_uv_out, "remix_uv_valid");
+            }
             if (needs_clip_distance_emulation) {
                 clip_distances = Id{DefineOutput(F32[MaxEmulatedClipDistances], 0)};
                 output_params[num_attrs] = GetAttributeInfo(

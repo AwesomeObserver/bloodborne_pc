@@ -230,17 +230,19 @@ bool Instance::CreateDevice() {
         vk::PhysicalDeviceImage2DViewOf3DFeaturesEXT, vk::PhysicalDeviceShaderClockFeaturesKHR,
         vk::PhysicalDeviceComputeShaderDerivativesFeaturesKHR,
         vk::PhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE,
-        vk::PhysicalDeviceCooperativeMatrixFeaturesKHR, vk::PhysicalDeviceShaderFloat8FeaturesEXT>();
+        vk::PhysicalDeviceCooperativeMatrixFeaturesKHR, vk::PhysicalDeviceShaderFloat8FeaturesEXT,
+        vk::PhysicalDeviceTransformFeedbackFeaturesEXT>();
     features = feature_chain.get().features;
 
     const vk::StructureChain properties_chain = physical_device.getProperties2<
         vk::PhysicalDeviceProperties2, vk::PhysicalDeviceVulkan11Properties,
         vk::PhysicalDeviceVulkan12Properties, vk::PhysicalDeviceVulkan13Properties,
-        vk::PhysicalDevicePushDescriptorPropertiesKHR>();
+        vk::PhysicalDevicePushDescriptorPropertiesKHR, vk::PhysicalDeviceTransformFeedbackPropertiesEXT>();
     vk11_props = properties_chain.get<vk::PhysicalDeviceVulkan11Properties>();
     vk12_props = properties_chain.get<vk::PhysicalDeviceVulkan12Properties>();
     vk13_props = properties_chain.get<vk::PhysicalDeviceVulkan13Properties>();
     push_descriptor_props = properties_chain.get<vk::PhysicalDevicePushDescriptorPropertiesKHR>();
+    transform_feedback_props = properties_chain.get<vk::PhysicalDeviceTransformFeedbackPropertiesEXT>();
     LOG_INFO(Render_Vulkan, "Physical device subgroup size {}", vk11_props.subgroupSize);
 
     if (available_extensions.empty()) {
@@ -284,6 +286,16 @@ bool Instance::CreateDevice() {
                "Required Vulkan feature unavailable: nullDescriptor");
 
     // Optional
+    const bool transform_feedback = add_extension(VK_EXT_TRANSFORM_FEEDBACK_EXTENSION_NAME) &&
+        feature_chain.get<vk::PhysicalDeviceTransformFeedbackFeaturesEXT>().transformFeedback;
+#ifdef _WIN32
+    const bool remix_memory = add_extension(VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME);
+    remix_capture = transform_feedback && remix_memory && properties.vendorID == 0x10de &&
+        transform_feedback_props.maxTransformFeedbackBuffers >= 1 &&
+        transform_feedback_props.maxTransformFeedbackBufferDataStride >= 32 &&
+        transform_feedback_props.maxTransformFeedbackBufferDataSize >= 32 &&
+        transform_feedback_props.maxTransformFeedbackStreamDataSize >= 32;
+#endif
     maintenance_5 = add_extension(VK_KHR_MAINTENANCE_5_EXTENSION_NAME);
     maintenance_8 = add_extension(VK_KHR_MAINTENANCE_8_EXTENSION_NAME);
     // bbport: GPU breadcrumbs (vk_breadcrumbs.h).
@@ -539,6 +551,9 @@ bool Instance::CreateDevice() {
             .maintenance4 = vk13_features.maintenance4,
         },
         // Extensions
+        vk::PhysicalDeviceTransformFeedbackFeaturesEXT{
+            .transformFeedback = transform_feedback,
+        },
         vk::PhysicalDeviceCustomBorderColorFeaturesEXT{
             .customBorderColors = true,
             .customBorderColorWithoutFormat = true,
@@ -630,6 +645,9 @@ bool Instance::CreateDevice() {
         },
     };
 
+    if (!transform_feedback) {
+        device_chain.unlink<vk::PhysicalDeviceTransformFeedbackFeaturesEXT>();
+    }
     if (!custom_border_color) {
         device_chain.unlink<vk::PhysicalDeviceCustomBorderColorFeaturesEXT>();
     }

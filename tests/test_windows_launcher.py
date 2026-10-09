@@ -15,6 +15,14 @@ spec.loader.exec_module(launcher)
 
 
 class WindowsLauncherTests(unittest.TestCase):
+    def test_renderer_choice_sets_game_mode_without_changing_saved_graphics(self):
+        for renderer, expected in [('vulkan', '0'), ('remix', '1')]:
+            settings = {**launcher.APP_DEFAULTS, 'renderer': renderer, 'hdr': True}
+            with patch.dict(os.environ, {'BB_RTX_REMIX': '1'}, clear=True):
+                env = launcher.game_environment(settings)
+            self.assertEqual(env['BB_RTX_REMIX'], expected)
+            self.assertTrue(settings['hdr'])
+
     def test_play_role_preserves_native_status_and_unicode_log(self):
         with tempfile.TemporaryDirectory() as directory:
             settings = {**launcher.APP_DEFAULTS, 'user_dir': directory}
@@ -113,6 +121,12 @@ class WindowsLauncherTests(unittest.TestCase):
                     app.show('controls')
                     root.update_idletasks()
                     self.assertEqual(root.title(), 'Bloodborne — bbport v2')
+                    app.show('graphics')
+                    app.var('renderer', 'app').set('remix')
+                    app.collect()
+                    self.assertEqual(launcher.load_json(data/'settings.json',{})['renderer'],'remix')
+                    self.assertIn('RTX Remix',app.summary())
+                    app.show('controls')
                     self.assertEqual(app.binding_buttons[0].winfo_class(), 'TButton')
                     self.assertEqual(app.var('key.walk', 'ini').get(), 'Left Alt, Right Alt')
                     app.gamepad_box.current(1)

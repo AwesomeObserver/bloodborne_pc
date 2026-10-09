@@ -243,7 +243,7 @@ TemporalUpscaler::~TemporalUpscaler() {
 
 bool TemporalUpscaler::Active() const {
     // Toggle 1 << 24 switches it off at run time (A/B); history restarts after.
-    return enabled && !failed &&
+    return !scene_renderer && enabled && !failed &&
            (BbSettings::Get().upscaler == BbSettings::UpscalerFsr3 ||
             BbSettings::IsFsr4(BbSettings::Get().upscaler) ||
             BbSettings::Get().upscaler == BbSettings::UpscalerTaa ||
@@ -1437,7 +1437,7 @@ float TemporalUpscaler::SceneMipBias() const {
 
 bool TemporalUpscaler::Scaled() const {
     // Resolve before HUD even at native 1080p: FG needs a matching HUDless frame.
-    return scaled_session || target_width != 1920 || target_height != 1080 ||
+    return bool(scene_renderer) || scaled_session || target_width != 1920 || target_height != 1080 ||
            BbSettings::Get().frame_generation != BbSettings::FrameGenerationOff;
 }
 
@@ -1685,6 +1685,7 @@ void TemporalUpscaler::RunUiOnly(VideoCore::ImageId color_id, VideoCore::ImageId
     done_this_frame = ui_phase = true;
     ui_color = color_id;
     ui_depth = depth_id;
+    if (scene_renderer) scene_renderer(vk::Image(ui_image), ui_width, ui_height);
 }
 
 void TemporalUpscaler::RunScaled() {
@@ -2042,7 +2043,7 @@ void TemporalUpscaler::RunScaled() {
 
 void TemporalUpscaler::CaptureGeneration(vk::Image depth, vk::Format depth_format, u32 w, u32 h,
                                          float frame_ms, bool reset) {
-    if (BbSettings::Get().frame_generation == BbSettings::FrameGenerationOff)
+    if (scene_renderer || BbSettings::Get().frame_generation == BbSettings::FrameGenerationOff)
         return;
     const auto &settings = BbSettings::Get();
     if (settings.frame_generation == BbSettings::FrameGenerationDlss &&

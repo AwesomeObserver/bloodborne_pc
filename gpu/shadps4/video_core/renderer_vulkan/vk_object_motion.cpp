@@ -51,6 +51,10 @@ bool CreateBuffer(const Instance& instance, vk::DeviceSize size, bool host, vk::
 
 ObjectMotion::ObjectMotion(const Instance& instance_, Scheduler& scheduler_)
     : instance{instance_}, scheduler{scheduler_} {
+    if (const char* remix = std::getenv("BB_RTX_REMIX"); remix && std::string_view(remix) == "1") {
+        std::puts("Object motion: Remix owns scene deformation and reconstruction");
+        return;
+    }
     // Pipeline selection limits the extra attachment and vertex stores to likely
     // animated draws. A setting or environment override can still disable the path.
     if (!BbSettings::Get().object_motion ||

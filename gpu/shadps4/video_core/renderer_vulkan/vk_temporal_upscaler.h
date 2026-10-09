@@ -14,6 +14,7 @@
 
 #include <array>
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -50,6 +51,8 @@ public:
                      VideoCore::TextureCache& texture_cache, Runtime& runtime,
                      CameraMotion& camera_motion, SceneTargets& scene_targets);
     ~TemporalUpscaler();
+    using SceneRenderer = std::function<bool(vk::Image, u32, u32)>;
+    void SetSceneRenderer(SceneRenderer renderer) { scene_renderer = std::move(renderer); enabled = true; }
 
     [[nodiscard]] bool Enabled() const noexcept {
         return enabled;
@@ -134,6 +137,7 @@ public:
     void DumpPresented(vk::Image image, u32 width, u32 height, vk::Format format);
 
 private:
+    SceneRenderer scene_renderer;
     /// bbport: views of guest images the upscaler reads, kept across frames: FSR 4 registers
     /// images by view in a registry of eight (a new view per frame filled it at Native AA).
     vk::ImageView CachedView(const VideoCore::Image& image, vk::Format format,

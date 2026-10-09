@@ -161,6 +161,14 @@ def main():
         env['BB_CRASH_DUMP'] = '0'
     env.setdefault('BB_CONFIG', str(data / 'bbport.ini'))
     config = env['BB_CONFIG']
+    remix = env.get('BB_RTX_REMIX') == '1'
+    if remix:
+        # The official SDK owns reconstruction. Leave saved player settings intact.
+        env.update(BB_UPSCALER='none', BB_FRAME_GENERATION='off', BB_OBJECT_MOTION='0',
+                   BB_UPSCALE_PRESET='0', BB_HDR='0', BB_LIVE_RES='1')
+        for key in ('BB_RENDER_RES', 'BB_OUTPUT_RES', 'BB_AUTO_RENDER_RES'):
+            env.pop(key, None)
+        print('Renderer: official RTX Remix (experimental game scene capture; see logs/rtx-remix-game.log)')
     if not env.get('BB_FSR411_DIR') and not (PORT / 'fsr4_411').is_dir() and (data / 'fsr4_411').is_dir():
         env['BB_FSR411_DIR'] = str(data / 'fsr4_411')
 
@@ -204,7 +212,7 @@ def main():
                 env.pop(key, None)
         fps = env.get('BB_FPS', 'uncap') if patched else '30'
         scaled_render = scaled_output = None
-        if not env.get('BB_RENDER_RES'):
+        if not env.get('BB_RENDER_RES') and not remix:
             printed = run_script('patches.py', '--print-scaled', '--settings', config, capture=True).split()
             if len(printed) == 2:
                 scaled_render, scaled_output = printed

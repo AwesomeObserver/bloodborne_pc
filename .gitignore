@@ -33,6 +33,7 @@ patches.json
 *.dll
 # Official Remix SDK runtime and generated diagnostic caches stay local.
 /remix-runtime-*/
+/remix-assets/
 /rtx-remix/
 /metrics.txt
 /*.dxvk-cache

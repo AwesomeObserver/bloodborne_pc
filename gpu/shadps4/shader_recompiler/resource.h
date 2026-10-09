@@ -123,6 +123,7 @@ struct ImageResource {
     /// queries, offsets): needs the native-size image, not a reduced scene proxy.
     bool needs_native{};
     u8 constant_mip_index{};
+    u16 remix_uv = 0xffff; ///< parameter * 4 + first UV component, or unknown
     MipStorageFallbackMode mip_fallback_mode{};
     SharpFetchPostOp post_op{};
 

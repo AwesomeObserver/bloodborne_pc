@@ -37,6 +37,9 @@ namespace Vulkan {
 
 class GraphicsPipeline;
 class Runtime;
+#ifdef _WIN32
+class RemixScene;
+#endif
 
 class Rasterizer {
 public:
@@ -431,6 +434,9 @@ private:
     u64 motion_geometry{};    ///< vertex-stream identity of the current direct draw
     bool gbuffer_draw = false;
     std::unique_ptr<TemporalUpscaler> upscaler; // bbport: FSR (docs/upscaler.md)
+#ifdef _WIN32
+    std::unique_ptr<RemixScene> remix_scene;
+#endif
     std::array<float, 2> draw_jitter{};         ///< viewport offset of the current draw, pixels
     std::array<float, 2> target_scale{1.0f, 1.0f}; ///< pass drawn into the upscaler's output-size images
     const bool host_markers_enabled;

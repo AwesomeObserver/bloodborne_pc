@@ -108,7 +108,7 @@ remixapi_MaterialInfo Renderer::MaterialDefaults(uint64_t id) {
 }
 
 bool Renderer::Initialize(const std::filesystem::path &path, uint32_t width,
-                          uint32_t height) {
+                          uint32_t height, std::array<uint8_t, 8> adapter) {
   auto &p = *impl;
   if (p.module || !Dimensions(width, height) || !path.is_absolute())
     return p.Fail("Initialize arguments", -1);
@@ -139,7 +139,10 @@ bool Renderer::Initialize(const std::filesystem::path &path, uint32_t width,
     return false;
   if (!p.api.dxvk_CreateD3D9 || !p.api.dxvk_RegisterD3D9Device ||
       !p.api.Present || !p.api.dxvk_CopyRenderingOutput || !p.api.CreateMesh ||
-      !p.api.CreateMaterial || !p.api.CreateLight || !p.api.Shutdown)
+      !p.api.CreateMaterial || !p.api.CreateLight || !p.api.Shutdown ||
+      !p.api.SetupCamera || !p.api.DrawInstance || !p.api.DrawLightInstance ||
+      !p.api.DestroyMesh || !p.api.DestroyMaterial || !p.api.DestroyLight ||
+      !p.api.SetConfigVariable)
     return p.Fail("incomplete SDK interface", -1, true);
 
   WNDCLASSW window_class{};
@@ -161,7 +164,21 @@ bool Renderer::Initialize(const std::filesystem::path &path, uint32_t width,
   if (!p.Check(p.api.dxvk_CreateD3D9(false, &p.d3d), "CreateD3D9"))
     return false;
   LUID luid{};
-  if (!p.CheckHr(p.d3d->GetAdapterLUID(D3DADAPTER_DEFAULT, &luid),
+  UINT adapter_index = D3DADAPTER_DEFAULT;
+  if (std::any_of(adapter.begin(), adapter.end(), [](uint8_t b) { return b != 0; })) {
+    bool found = false;
+    for (UINT i = 0; i < p.d3d->GetAdapterCount(); ++i) {
+      LUID candidate{};
+      if (SUCCEEDED(p.d3d->GetAdapterLUID(i, &candidate)) &&
+          !std::memcmp(&candidate, adapter.data(), sizeof(candidate))) {
+        adapter_index = i;
+        found = true;
+        break;
+      }
+    }
+    if (!found) return p.Fail("game Vulkan adapter unavailable in Remix", -1, true);
+  }
+  if (!p.CheckHr(p.d3d->GetAdapterLUID(adapter_index, &luid),
                  "GetAdapterLUID"))
     return false;
   std::memcpy(p.adapter_luid.data(), &luid, sizeof(luid));
@@ -174,7 +191,7 @@ bool Renderer::Initialize(const std::filesystem::path &path, uint32_t width,
   present.hDeviceWindow = p.window;
   present.Windowed = TRUE;
   present.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
-  if (!p.CheckHr(p.d3d->CreateDeviceEx(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL,
+  if (!p.CheckHr(p.d3d->CreateDeviceEx(adapter_index, D3DDEVTYPE_HAL,
                                        p.window,
                                        D3DCREATE_HARDWARE_VERTEXPROCESSING,
                                        &present, nullptr, &p.device),

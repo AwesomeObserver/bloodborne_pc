@@ -66,6 +66,8 @@ public:
     vk::Device GetDevice() const {
         return *device;
     }
+    bool IsRemixCaptureSupported() const { return remix_capture; }
+    u64 MaxTransformFeedbackBufferSize() const { return transform_feedback_props.maxTransformFeedbackBufferSize; }
 
     /// Returns the VMA allocator handle
     VmaAllocator GetAllocator() const {
@@ -526,6 +528,8 @@ public:
     [[nodiscard]] bool IsFormatSupported(vk::Format format, vk::FormatFeatureFlags2 flags) const;
 
 private:
+    bool remix_capture = false;
+    vk::PhysicalDeviceTransformFeedbackPropertiesEXT transform_feedback_props{};
     Instance(const Frontend::WindowSystemInfo&, s32, bool, bool);
     /// Creates the logical device opportunistically enabling extensions
     bool CreateDevice();

@@ -180,7 +180,8 @@ APP_DEFAULTS = {'ui_language': '', 'game_dir': str(PORT_DIR.parent / 'CUSA03173'
                 'fps_mode': 'uncap', 'frame_cap': '', 'draw_pipe': '', 'readbacks': '',
                 'frames_ahead': '', 'frame_stats': False, 'gpu_profile': False,
                 'vk_validation': False, 'extra_env': '', 'close_on_play': False,
-                'check_updates': True, 'gamepad': '', 'save_log': False, 'fsr411_dir': ''}
+                'check_updates': True, 'gamepad': '', 'save_log': False, 'fsr411_dir': '',
+                'renderer': 'vulkan'}
 for name, _label, keys, buttons in CONTROLS:
     INI_DEFAULTS[f'key.{name}'] = keys
     if buttons is not None:
@@ -192,6 +193,8 @@ UPSCALERS = [('dlss', ('DLSS (NVIDIA GeForce RTX)',)),
              ('fsr3', ('FSR 3.1 (every GPU)', 'FSR 3.1 (любая видеокарта)')),
              ('taa', ('TAA (native resolution anti-aliasing)', 'TAA (нативное сглаживание)')),
              ('off', ('Off', 'Выключен'))]
+RENDERERS = [('vulkan', ('Vulkan',)),
+             ('remix', ('RTX Remix (experimental)', 'RTX Remix (экспериментальный)'))]
 PRESETS = [('0', ('Native AA (×1.0)',)), ('1', ('Quality (×1.5)',)), ('2', ('Balanced (×1.7)',)),
            ('3', ('Performance (×2)',)), ('4', ('Ultra Performance (×3)',))]
 FRAME_GENERATION = [('off', ('Off', 'Выключена')),
@@ -362,6 +365,7 @@ def game_environment(s):
         if '=' in item:
             key, value = item.split('=', 1)
             env[key] = value
+    env['BB_RTX_REMIX'] = '1' if s.get('renderer') == 'remix' else '0'
     env['PYTHONUNBUFFERED'] = '1'
     env['PYTHONIOENCODING'] = 'utf-8'
     return env
@@ -696,13 +700,14 @@ class Launcher:
         quick.grid(row=0, column=1, sticky='nw')
         ttk.Label(quick, text=_('Quick settings', 'Основное'), style='Section.TLabel').grid(
             row=0, column=0, columnspan=2, sticky='w', pady=(0, 2))
+        self.row(quick, _('Renderer', 'Рендерер'), self.choice(quick, 'renderer', 'app', RENDERERS, 26))
         self.row(quick, _('Frame rate', 'Частота кадров'), self.choice(quick, 'fps_mode', 'app', FPS_MODES, 26))
         self.row(quick, _('Upscaler', 'Апскейлер'), self.choice(quick, 'upscaler', 'ini', UPSCALERS, 26))
         self.row(quick, _('Preset', 'Пресет'), self.choice(quick, 'preset', 'ini', PRESETS, 26))
         self.row(quick, _('Output', 'Разрешение'), self.choice(quick, 'output_res', 'ini', OUTPUTS, 26))
         ttk.Checkbutton(quick, text=_('Fullscreen', 'Полный экран'), variable=self.var('fullscreen', 'app')).grid(
             row=self.next_row(quick), column=1, sticky='w', pady=(8, 0))
-        for key in ('fps_mode', 'upscaler', 'output_res'):
+        for key in ('fps_mode', 'upscaler', 'output_res', 'renderer'):
             self.vars[key].trace_add('write', lambda *_a: self.refresh_status())
 
     def draw_banner(self):
@@ -752,7 +757,15 @@ class Launcher:
         f = self.scrolled_page('graphics', _('Graphics', 'Графика'),
                                _('Stored in bbport.ini; the in-game menu (Insert or L3+R3) changes the same values.',
                                  'Хранится в bbport.ini; в игре меняется через меню (Insert или L3+R3).'))
-        self.section(f, _('Upscaling', 'Апскейлинг'), top=4)
+        self.section(f, _('Renderer', 'Рендерер'), top=4)
+        self.row(f, _('Renderer', 'Рендерер'), self.choice(f, 'renderer', 'app', RENDERERS),
+                 _('RTX Remix uses the official runtime to path trace captured game geometry. Requires a restart. '
+                   'Experimental: scene coverage and original lighting are incomplete. Game HDR, upscaling and '
+                   'frame generation are bypassed for this session. Select Vulkan to restore normal rendering.',
+                   'RTX Remix трассирует захваченную геометрию игры официальным рантаймом. Нужен перезапуск. '
+                   'Экспериментально: захват сцены и исходное освещение неполные. HDR, апскейлинг и генерация '
+                   'кадров игры отключены на эту сессию. Vulkan возвращает обычный рендер.'))
+        self.section(f, _('Upscaling', 'Апскейлинг'))
         self.row(f, _('Upscaler', 'Апскейлер'), self.choice(f, 'upscaler', 'ini', UPSCALERS),
                  _("Temporal upscaling with the game's own motion vectors. FSR 4 needs its assets (below) and "
                    'a GPU with INT8 dot products; otherwise the game falls back to FSR 3.1 by itself.',
@@ -1184,6 +1197,8 @@ class Launcher:
         if info and info[1] != PATCH_VERSION:
             fps = ('30 FPS',)
         upscaler = dict(UPSCALERS).get(self.var('upscaler', 'ini').get(), ('?',))[0].split(' (')[0]
+        if self.var('renderer', 'app').get() == 'remix':
+            upscaler = 'RTX Remix'
         output = self.var('output_res', 'ini').get().replace('x', ' × ')
         return f'{_(*fps)}   ·   {upscaler}   ·   {output}'
 

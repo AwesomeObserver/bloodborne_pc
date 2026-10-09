@@ -36,6 +36,7 @@ Python installation is needed.
 | Feature | What you get |
 | :--- | :--- |
 | **DLSS & FSR upscaling** | DLSS Super Resolution / DLAA, FSR 3.1, FSR 4, FSR 4.1.1/FP8 and native TAA. **720p–4K**, Native AA through Ultra Performance. |
+| **RTX Remix (experimental)** | Official SDK connected to captured game geometry, textures and camera, with native HUD composition. Original lighting and scene coverage are incomplete. [Status and limitations](docs/rtx-path-tracing-windows.md). |
 | **DLSS model presets** | Auto, **A–F, J, K, M, L**. CNN/transformer selection follows the preset automatically, independently of render scale. |
 | **Frame generation** | **DLSS FG ×2** or **FSR 3.1 FG ×2**, independent of upscaling. FSR FG also works with DLSS or native TAA. |
 | **Raw mouse camera** | Windows Raw Input, direct orbit response, equal-axis sensitivity, invert Y and automatic controller handoff. No added acceleration or virtual stick conversion. |

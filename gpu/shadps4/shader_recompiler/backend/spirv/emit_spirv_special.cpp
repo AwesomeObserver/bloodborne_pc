@@ -187,6 +187,20 @@ static void EmitFragmentMotion(EmitContext& ctx) {
 }
 
 void EmitEpilogue(EmitContext& ctx) {
+    if (ctx.VertexRemix()) {
+        Id u = ctx.f32_zero_value, v = ctx.f32_zero_value;
+        const u32 selector = ctx.runtime_info.hw.vs.remix_uv;
+        if (selector / 4 < IR::NumParams && selector % 4 < 3) {
+            const auto& output = ctx.output_params[selector / 4];
+            if (Sirit::ValidId(output.id) && output.num_components >= selector % 4 + 2) {
+                const Id uv = ctx.OpLoad(ctx.F32[output.num_components], output.id);
+                u = ctx.OpCompositeExtract(ctx.F32[1], uv, selector % 4);
+                v = ctx.OpCompositeExtract(ctx.F32[1], uv, selector % 4 + 1);
+            }
+        }
+        ctx.OpStore(ctx.remix_uv_out, ctx.OpCompositeConstruct(ctx.F32[4],
+            std::array<Id,4>{u, v, ctx.Constant(ctx.F32[1],1.f), ctx.f32_zero_value}));
+    }
     if (Sirit::ValidId(ctx.motion_out_cur)) {
         EmitVertexMotion(ctx);
     }
