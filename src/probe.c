@@ -166,6 +166,22 @@ static LONG fatal_exception(EXCEPTION_POINTERS *info) {
     fprintf(stderr,"  rax=%016llx rbx=%016llx rcx=%016llx rdx=%016llx\n  rsi=%016llx rdi=%016llx rbp=%016llx rsp=%016llx\n",
             c->Rax,c->Rbx,c->Rcx,c->Rdx,c->Rsi,c->Rdi,c->Rbp,c->Rsp);
     if (gpu_enabled) bbgpu_dump_guest_writes(info);
+    /* Unwind with the PE exception tables first: system libraries (heap checks in ntdll) keep
+     * no frame pointers. Stops at the first frame without unwind data (guest code). */
+    {
+        CONTEXT unwind=*c;
+        fprintf(stderr,"  unwind:\n");
+        for (int depth=0; depth<40 && unwind.Rip; ++depth) {
+            describe_address(where,sizeof(where),(uintptr_t)unwind.Rip);
+            fprintf(stderr,"  @%d %s\n",depth,where);
+            DWORD64 base=0;
+            PRUNTIME_FUNCTION entry=RtlLookupFunctionEntry(unwind.Rip,&base,NULL);
+            if (!entry) break;
+            void *handler_data=NULL;
+            DWORD64 establisher=0;
+            RtlVirtualUnwind(UNW_FLAG_NHANDLER,base,unwind.Rip,entry,&unwind,&handler_data,&establisher,NULL);
+        }
+    }
     /* rbp chain (guest and host code keep frame pointers). */
     uintptr_t rbp=(uintptr_t)c->Rbp;
     for (int depth=0; depth<24 && rbp; ++depth) {
@@ -184,6 +200,19 @@ static LONG fatal_exception(EXCEPTION_POINTERS *info) {
 static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
     const EXCEPTION_RECORD *record=info->ExceptionRecord;
     DWORD code=record->ExceptionCode;
+    if (code==EXCEPTION_ILLEGAL_INSTRUCTION) {
+        if (gpu_enabled && bbgpu_handle_illegal(info)) return EXCEPTION_CONTINUE_EXECUTION;
+        if (runtime_fault_recover) {
+            unsigned long long *buffer=*runtime_fault_recover;
+            runtime_fault_recover=NULL;
+            CONTEXT *c=info->ContextRecord;
+            c->Rsp=((c->Rsp-128)&~(DWORD64)15)-40;
+            c->Rcx=(DWORD64)(uintptr_t)buffer;
+            c->Rdx=1;
+            c->Rip=(DWORD64)(uintptr_t)bb_longjmp;
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+    }
     if (code==EXCEPTION_ACCESS_VIOLATION && record->NumberParameters>=2) {
         /* GPU page tracking (write-protected guest pages) is resolved first. */
         if (gpu_enabled && bbgpu_handle_fault(info,(void *)record->ExceptionInformation[1])) return EXCEPTION_CONTINUE_EXECUTION;
@@ -213,6 +242,8 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
     }
     /* BB_STRICT_HANDLES=1: a closed or invalid handle used anywhere is reported (diagnostics). */
     if (code==0xC0000008 /* STATUS_INVALID_HANDLE */) return fatal_exception(info);
+    if (code==0xC0000374 /* STATUS_HEAP_CORRUPTION */ || code==0xC0000409 /* fail fast */)
+        return fatal_exception(info);
     return EXCEPTION_CONTINUE_SEARCH;
 }
 static LONG WINAPI unhandled_fault(EXCEPTION_POINTERS *info) { return fatal_exception(info); }

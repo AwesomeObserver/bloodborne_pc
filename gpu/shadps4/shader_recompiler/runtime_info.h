@@ -89,6 +89,9 @@ struct MotionVectors {
     /// the position array (vec4 per vertex; element 0 is scratch), fixed for the session.
     static inline u64 params_address = 0;
     static inline u64 positions_address = 0;
+    /// SPIR-V SpecId for the session buffer device addresses (filled at pipeline create).
+    static constexpr u32 ParamsAddressSpecId = 0;
+    static constexpr u32 PositionsAddressSpecId = 1;
     static constexpr u32 FlagStore = 1;
     static constexpr u32 FlagLoad = 2;
 };

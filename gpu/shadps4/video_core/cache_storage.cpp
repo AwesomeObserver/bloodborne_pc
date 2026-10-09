@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdio>
 #include "common/elf_info.h"
+#include "common/logging/log.h"
 #include "common/io_file.h"
 #include "common/polyfill_thread.h"
 #include "common/thread.h"
@@ -18,6 +20,7 @@
 #include <exception>
 #include <mutex>
 #include <queue>
+#include <unordered_set>
 
 namespace {
 
@@ -75,11 +78,12 @@ constexpr std::string GetBlobFileExtension(BlobType type) {
     }
 }
 
-void DataBase::Open() {
+void DataBase::Open(std::string_view family_name) {
     if (opened) {
         return;
     }
 
+    family = std::string{family_name};
     const auto& game_info = Common::ElfInfo::Instance();
 
     using namespace Common::FS;
@@ -102,6 +106,19 @@ void DataBase::Open() {
         if (!std::filesystem::exists(cache_path)) {
             std::filesystem::create_directories(cache_path);
         }
+        if (!family.empty()) {
+            const auto serial = std::filesystem::path{game_info.GameSerial()};
+            auto candidate = GetProcessDirectory() / "cache_bundled" / family / serial;
+            if (!std::filesystem::is_directory(candidate)) {
+                candidate =
+                    GetUserPath(PathType::UserDir) / "cache_bundled" / family / serial;
+            }
+            if (std::filesystem::is_directory(candidate)) {
+                bundled_path = candidate;
+                LOG_INFO(Render, "Bundled shader cache: {}", bundled_path.string());
+                std::printf("Bundled shader cache: %s\n", bundled_path.string().c_str());
+            }
+        }
     }
 
     io_worker = std::jthread{ProcessIO};
@@ -119,6 +136,27 @@ void DataBase::Close() {
     if (EmulatorSettings.IsPipelineCacheArchived()) {
         mz_zip_writer_finalize_archive(&zip_ar);
         mz_zip_writer_end(&zip_ar);
+    } else if (EmulatorSettingsImpl::Flag("BB_CACHE_COLLECT", false) && !family.empty() &&
+               std::filesystem::exists(cache_path)) {
+        using namespace Common::FS;
+        const auto dest = GetUserPath(PathType::UserDir) / "cache_collect" / family /
+                          cache_path.filename();
+        std::error_code ec;
+        std::filesystem::create_directories(dest, ec);
+        u64 copied = 0;
+        for (const auto& entry : std::filesystem::directory_iterator(cache_path, ec)) {
+            if (!entry.is_regular_file(ec)) {
+                continue;
+            }
+            std::filesystem::copy_file(entry.path(), dest / entry.path().filename(),
+                                       std::filesystem::copy_options::overwrite_existing, ec);
+            if (!ec) {
+                ++copied;
+            }
+        }
+        LOG_INFO(Render, "Collected shader cache ({} files) to {}", copied, dest.string());
+        std::printf("Collected shader cache (%llu files) to %s\n",
+                    static_cast<unsigned long long>(copied), dest.string().c_str());
     }
 
     opened = false;
@@ -218,7 +256,11 @@ void DataBase::Load(BlobType type, const std::string& name, std::vector<u8>& dat
 
     auto path = EmulatorSettings.IsPipelineCacheArchived() ? std::filesystem::path{name}
                                                            : cache_path / name;
-    return LoadVector(type, path, data);
+    LoadVector(type, path, data);
+    if (data.empty() && !bundled_path.empty() && !EmulatorSettings.IsPipelineCacheArchived()) {
+        auto bundled = bundled_path / name;
+        LoadVector(type, bundled, data);
+    }
 }
 
 void DataBase::Load(BlobType type, const std::string& name, std::vector<u32>& data) {
@@ -228,7 +270,11 @@ void DataBase::Load(BlobType type, const std::string& name, std::vector<u32>& da
 
     auto path = EmulatorSettings.IsPipelineCacheArchived() ? std::filesystem::path{name}
                                                            : cache_path / name;
-    return LoadVector(type, path, data);
+    LoadVector(type, path, data);
+    if (data.empty() && !bundled_path.empty() && !EmulatorSettings.IsPipelineCacheArchived()) {
+        auto bundled = bundled_path / name;
+        LoadVector(type, bundled, data);
+    }
 }
 
 void DataBase::ForEachBlob(BlobType type, const std::function<void(std::vector<u8>&& data)>& func) {
@@ -248,8 +294,19 @@ void DataBase::ForEachBlob(BlobType type, const std::function<void(std::vector<u
             }
         }
     } else {
-        for (const auto& file_name : std::filesystem::directory_iterator{cache_path}) {
-            if (file_name.path().extension().string().ends_with(ext)) {
+        std::unordered_set<std::string> seen;
+        const auto visit = [&](const std::filesystem::path& dir) {
+            if (dir.empty() || !std::filesystem::exists(dir)) {
+                return;
+            }
+            for (const auto& file_name : std::filesystem::directory_iterator{dir}) {
+                if (!file_name.path().extension().string().ends_with(ext)) {
+                    continue;
+                }
+                const auto name = file_name.path().filename().string();
+                if (!seen.insert(name).second) {
+                    continue;
+                }
                 using namespace Common::FS;
                 const auto& file = IOFile{file_name, FileAccessMode::Read};
                 if (file.IsOpen()) {
@@ -258,7 +315,9 @@ void DataBase::ForEachBlob(BlobType type, const std::function<void(std::vector<u
                     func(std::move(data));
                 }
             }
-        }
+        };
+        visit(cache_path);
+        visit(bundled_path);
     }
 }
 
@@ -269,6 +328,10 @@ void DataBase::Clear() {
     std::error_code ec;
     u64 removed = 0;
     for (const auto& entry : std::filesystem::directory_iterator(cache_path, ec)) {
+        // The driver's own pipeline cache does not depend on our serialization versions.
+        if (entry.path().filename() == "vk_pipeline_cache.bin") {
+            continue;
+        }
         if (entry.is_regular_file(ec) && std::filesystem::remove(entry.path(), ec)) {
             ++removed;
         }

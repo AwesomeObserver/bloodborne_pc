@@ -340,6 +340,10 @@ extern "C" void bbgpu_patch_image(unsigned char* image, uint64_t size) {
     BbMouse::Install(image, size);
 }
 
+extern "C" int bbgpu_handle_illegal(void* ucontext) {
+    return Core::Signals::Instance()->DispatchIllegalInstruction(ucontext) ? 1 : 0;
+}
+
 extern "C" unsigned bbgpu_symbol_count(void) {
     return unsigned(g_symbols.size());
 }

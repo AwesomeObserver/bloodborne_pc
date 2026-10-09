@@ -26,7 +26,8 @@ public:
         return *Common::Singleton<DataBase>::Instance();
     }
 
-    void Open();
+    /// `family` selects the read-only bundled overlay (`cache_bundled/<family>/<serial>`).
+    void Open(std::string_view family = {});
     void Close();
     [[nodiscard]] bool IsOpened() const {
         return opened;
@@ -46,6 +47,8 @@ public:
 private:
     std::jthread io_worker{};
     std::filesystem::path cache_path{};
+    std::filesystem::path bundled_path{};
+    std::string family{};
     bool opened{};
 };
 

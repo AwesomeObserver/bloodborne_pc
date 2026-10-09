@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <memory>
 #include <boost/container/static_vector.hpp>
 #include <xxhash.h>
 
