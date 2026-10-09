@@ -308,6 +308,117 @@ static void test_keyboard_movement(SDL_Joystick *joystick) {
     SDL_UpdateJoysticks(); SDL_UpdateGamepads();
 }
 
+static void check_walk_strength(PadData mapped) {
+    const int x=(int)mapped.left_x-128, y=(int)mapped.left_y-128;
+    assert(x*x+y*y>=47*47 && x*x+y*y<=48*48);
+    assert(mapped.buttons==0 && mapped.l2==0 && mapped.r2==0);
+}
+
+static void check_walk_turn(PadData before, PadData after) {
+    const int ax=(int)before.left_x-128, ay=(int)before.left_y-128;
+    const int bx=(int)after.left_x-128, by=(int)after.left_y-128;
+    assert(ax*bx+ay*by>abs(ax*by-ay*bx));
+    check_walk_strength(after);
+}
+
+static void test_keyboard_walk(void) {
+    bool keys[SDL_SCANCODE_COUNT]={0};
+    const SDL_Scancode modifiers[]={SDL_SCANCODE_LALT,SDL_SCANCODE_RALT};
+    const unsigned directions[]={1,2,4,8};
+    assert(bindings[IN_WALK].key_count==2);
+    assert(bindings[IN_WALK].keys[0]==modifiers[0] && bindings[IN_WALK].keys[1]==modifiers[1]);
+    for (unsigned modifier=0;modifier<2;++modifier) {
+        keys[modifiers[modifier]]=true;
+        for (unsigned held=0;held<16;++held) {
+            keyboard_movement_at(keys,0,10000);
+            PadData mapped=keyboard_movement_at(keys,held,11000);
+            const int x=((held&8)!=0)-((held&4)!=0), y=((held&2)!=0)-((held&1)!=0);
+            if (x && y) {
+                assert(mapped.left_x==128+x*33 && mapped.left_y==128+y*34);
+            } else {
+                assert(mapped.left_x==128+x*48 && mapped.left_y==128+y*48);
+            }
+            if (x || y) check_walk_strength(mapped);
+            else assert(mapped.buttons==0);
+        }
+        for (unsigned p=0;p<4;++p) for (unsigned s=0;s<4;++s) {
+            const unsigned primary=directions[p], secondary=directions[s];
+            if (!!(primary&3)==!!(secondary&3)) continue;
+            keyboard_movement_at(keys,0,10000);
+            PadData cardinal=keyboard_movement_at(keys,primary,11000);
+            check_walk_strength(cardinal);
+            PadData diagonal=keyboard_movement_at(keys,primary|secondary,12000);
+            check_walk_turn(cardinal,diagonal);
+            /* Switching speeds while the diagonal is held retains its priority. */
+            keys[modifiers[modifier]]=false;
+            check_movement_primary(keyboard_movement_at(keys,primary|secondary,13000),primary);
+            keys[modifiers[modifier]]=true;
+            PadData again=keyboard_movement_at(keys,primary|secondary,14000);
+            assert(again.left_x==diagonal.left_x && again.left_y==diagonal.left_y);
+            PadData handoff=keyboard_movement_at(keys,secondary,15000);
+            check_walk_turn(diagonal,handoff);
+            for (unsigned poll=0;poll<80;++poll) {
+                PadData repeated=keyboard_movement_at(keys,secondary,15000+poll*100);
+                assert(repeated.left_x==handoff.left_x && repeated.left_y==handoff.left_y);
+            }
+            /* The speed modifier can also change during a primary release. */
+            keys[modifiers[modifier]]=false;
+            check_movement_primary(keyboard_movement_at(keys,secondary,22900),secondary);
+            keys[modifiers[modifier]]=true;
+            PadData final=keyboard_movement_at(keys,secondary,23000);
+            check_walk_turn(handoff,final);
+            assert(final.left_x==(secondary==4 ? 80 : secondary==8 ? 176 : 128));
+            assert(final.left_y==(secondary==1 ? 80 : secondary==2 ? 176 : 128));
+            for (unsigned frame=0;frame<120;++frame) {
+                PadData stable=keyboard_movement_at(keys,secondary,24000+frame*16667);
+                assert(stable.left_x==final.left_x && stable.left_y==final.left_y);
+            }
+            PadData stopped=keyboard_movement_at(keys,0,3000000);
+            assert(stopped.left_x==128 && stopped.left_y==128);
+        }
+        /* Alt alone must not slow, quantize or otherwise change controller input. */
+        movement_keys(keys,0);
+        for (unsigned px=0;px<256;++px) for (unsigned py=0;py<256;++py) {
+            PadData native={.left_x=(uint8_t)px,.left_y=(uint8_t)py,.right_x=17,.right_y=231,
+                            .buttons=BTN_CROSS,.l2=31,.r2=219};
+            const PadData before=native;
+            apply_keyboard(&native,keys,0);
+            assert(memcmp(&native,&before,sizeof(native))==0);
+        }
+        keys[modifiers[modifier]]=false;
+    }
+    keyboard_movement_sample(keys,0);
+}
+
+static void test_walk_remapping(const char *config) {
+    FILE *f=fopen(config,"w");
+    assert(f);
+    fputs("key.walk=Left Ctrl, Mouse X1\n",f);
+    fclose(f);
+    load_bindings();
+    assert(bindings[IN_WALK].key_count==1 && bindings[IN_WALK].keys[0]==SDL_SCANCODE_LCTRL);
+    assert(bindings[IN_WALK].mouse_count==1);
+    bool keys[SDL_SCANCODE_COUNT]={0};
+    keyboard_movement_sample(keys,0);
+    keys[SDL_SCANCODE_LALT]=keys[SDL_SCANCODE_RALT]=true;
+    assert(keyboard_movement_sample(keys,1).left_y==0); /* remapping replaces defaults */
+    keys[SDL_SCANCODE_LCTRL]=true;
+    assert(keyboard_movement_sample(keys,1).left_y==80);
+    keys[SDL_SCANCODE_LCTRL]=false;
+    PadData mapped={.left_x=128,.left_y=128};
+    apply_keyboard(&mapped,keys,SDL_BUTTON_X1MASK);
+    assert(mapped.left_y==80 && mapped.buttons==0);
+    f=fopen(config,"w");
+    assert(f);
+    fputs("key.walk=\n",f);
+    fclose(f);
+    load_bindings();
+    keys[SDL_SCANCODE_LCTRL]=true;
+    mapped=(PadData){.left_x=128,.left_y=128};
+    apply_keyboard(&mapped,keys,SDL_BUTTON_X1MASK);
+    assert(mapped.left_y==0 && mapped.buttons==0); /* explicitly unassigned */
+}
+
 int main(void) {
     char path[4096];
     int fd=bb_test_temp(path,sizeof(path),"bbport-pad-test");
@@ -404,6 +515,7 @@ int main(void) {
     test_keyboard_movement(joystick);
     test_keyboard_release_handoff();
     test_keyboard_transition_order();
+    test_keyboard_walk();
     /* Capture-helper names round-trip through the actual INI parser and pad ABI. */
     FILE *mouse_config=fopen(config,"w");
     assert(mouse_config);
@@ -467,6 +579,7 @@ int main(void) {
     mapped=(PadData){.left_x=128,.left_y=128};
     apply_keyboard(&mapped,keyboard,0);
     assert(mapped.left_x==218 && mapped.left_y==37); /* menu capture cleared old priority */
+    test_walk_remapping(config);
     SDL_CloseJoystick(joystick);
     if (gamepad) SDL_CloseGamepad(gamepad);
     gamepad=NULL;
@@ -474,5 +587,5 @@ int main(void) {
     SDL_Quit();
     unlink(path);
     unlink(config);
-    puts("PASS: pad ABI, near-full keyboard diagonals, all eight transition orders, stable held-axis priority, bounded primary-release handoffs, immediate stops and cancellations, exhaustive mixed input in both orders, opposing keys, menu/session resets, native/remapped input, debug camera chord, left/right clicks, SDL touch coordinates, overlay capture, controls");
+    puts("PASS: pad ABI, near-full keyboard diagonals, all eight transition orders, stable held-axis priority, bounded primary-release handoffs, immediate stops and cancellations, exhaustive mixed input in both orders, opposing keys, menu/session resets, native/remapped input, Alt walking, walk/run transitions and remapping, controller passthrough with Alt, debug camera chord, left/right clicks, SDL touch coordinates, overlay capture, controls");
 }

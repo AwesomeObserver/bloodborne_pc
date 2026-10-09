@@ -47,6 +47,7 @@ CONTROLS
 F4          Toggle raw mouse camera
 Insert      Open the port settings menu (controller: L3 + R3)
 WASD        Move
+Alt + WASD  Walk (hold either Alt; remap Walk (hold) on Controls)
 Arrow keys  Keyboard camera
 Space       Cross
 Left Shift  Circle
@@ -64,8 +65,9 @@ controller button/trigger. + adds an alternative; Clear removes bindings.
 Close the capture window to cancel. Remaps apply at the next game launch.
 
 Movement keys use a circular stick range. Adding a strafe key retains the held
-axis. Releasing the first key uses an 8 ms directional handoff at full stick
-strength. Releasing all movement keys stops keyboard input immediately.
+axis. Releasing the first key uses an 8 ms directional handoff at the current
+movement strength. Hold Alt to walk; release it to return to normal movement.
+Releasing all movement keys stops keyboard input immediately.
 Opposite movement keys cancel.
 
 The launcher and in-game menu expose mouse sensitivity and invert Y. Opening the

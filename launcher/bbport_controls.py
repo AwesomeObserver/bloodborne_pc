@@ -22,6 +22,7 @@ CONTROLS = [
     ('move_down', ('Move backward', 'Движение назад'), 'S', None),
     ('move_left', ('Move left', 'Движение влево'), 'A', None),
     ('move_right', ('Move right', 'Движение вправо'), 'D', None),
+    ('walk', ('Walk (hold)', 'Ходьба шагом (удерживать)'), 'Left Alt, Right Alt', None),
     ('look_up', ('Look up', 'Камера вверх'), 'Up', None),
     ('look_down', ('Look down', 'Камера вниз'), 'Down', None),
     ('look_left', ('Look left', 'Камера влево'), 'Left', None),

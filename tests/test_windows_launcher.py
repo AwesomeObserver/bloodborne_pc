@@ -27,6 +27,27 @@ class WindowsLauncherTests(unittest.TestCase):
                                         ('0', '1.00'), ('9999', '400.00'), ('125.5', '125.50')]:
                     path.write_text(f'mouse_sensitivity={value}\n', encoding='utf-8')
                     self.assertEqual(launcher.load_ini()[0]['mouse_sensitivity'], expected)
+    def test_walk_binding_defaults_remapping_and_unassigned_persist(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'bbport.ini'
+            with patch.dict(os.environ, {'BB_CONFIG': str(path)}):
+                path.write_text('# existing installation\nkey.move_up=T\n', encoding='utf-8')
+                values, lines = launcher.load_ini()
+                self.assertEqual(values['key.walk'], 'Left Alt, Right Alt')
+                self.assertNotIn('pad.walk', values)
+                for binding in ('Left Ctrl, Mouse X1', ''):
+                    values['key.walk'] = binding
+                    launcher.save_ini(values, lines)
+                    values, lines = launcher.load_ini()
+                    self.assertEqual(values['key.walk'], binding)
+                    self.assertEqual(values['key.move_up'], 'T')
+                    self.assertIn('# existing installation', lines)
+        for code, _label in launcher.bbport_lang.LANGUAGE_NAMES:
+            with patch.object(launcher, 'LANG', code):
+                label = launcher._('Walk (hold)', 'Ходьба шагом (удерживать)')
+                self.assertTrue(label)
+                if code not in ('', 'en'):
+                    self.assertNotEqual(label, 'Walk (hold)')
     def test_environment_passes_controller_language_and_logs(self):
         settings = {**launcher.APP_DEFAULTS, 'gamepad': 'saved-guid', 'save_log': True,
                     'fsr411_dir': 'D:/my assets/fsr4_411'}
@@ -64,6 +85,7 @@ class WindowsLauncherTests(unittest.TestCase):
                     root.update_idletasks()
                     self.assertEqual(root.title(), 'Bloodborne — bbport v2')
                     self.assertEqual(app.binding_buttons[0].winfo_class(), 'TButton')
+                    self.assertEqual(app.var('key.walk', 'ini').get(), 'Left Alt, Right Alt')
                     app.gamepad_box.current(1)
                     app.gamepad_box.event_generate('<<ComboboxSelected>>')
                     self.assertEqual(app.var('gamepad', 'app').get(), 'guid-one')
@@ -131,8 +153,16 @@ class WindowsLauncherTests(unittest.TestCase):
                         start.assert_not_called(); info.assert_called_once()
                         app.binding_buttons[2].invoke()
                         self.assertEqual(app.var('key.cross', 'ini').get(), '')
+                        walk_index = next(i for i, control in enumerate(launcher.CONTROLS) if control[0] == 'walk') * 3
+                        captured=Capture(b'key Left Ctrl\n'); start.return_value=captured
+                        app.binding_buttons[walk_index].invoke(); finish(captured, key='key.walk')
+                        self.assertEqual(app.var('key.walk', 'ini').get(), 'Left Ctrl')
+                        self.assertEqual(launcher.load_ini()[0]['key.walk'], 'Left Ctrl')
+                        app.binding_buttons[walk_index+2].invoke()
+                        self.assertEqual(app.var('key.walk', 'ini').get(), '')
                     app.reset_controls()
                     self.assertEqual(app.var('key.cross', 'ini').get(), 'Space')
+                    self.assertEqual(app.var('key.walk', 'ini').get(), 'Left Alt, Right Alt')
                     self.assertFalse(app.var('mouse_camera', 'ini').get())
                     self.assertEqual(app.var('mouse_sensitivity', 'ini').get(), 100.)
                     app.show('graphics')

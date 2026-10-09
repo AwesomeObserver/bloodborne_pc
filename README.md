@@ -69,6 +69,7 @@ You can add it to Steam or use **Advanced → Desktop shortcut**.
 | Action | Default input |
 | :--- | :--- |
 | Move / keyboard camera | **WASD** / **Arrow keys** |
+| Walk (hold) | **Alt + WASD** (either Alt) |
 | Toggle raw mouse camera | **F4** |
 | Open port settings | **Insert** / **L3 + R3** |
 | Cross / Circle / Square / Triangle | **Space** / **Left Shift** / **E** / **Q** |
@@ -82,8 +83,9 @@ alternative; **Clear** removes bindings. Remaps apply at the next game launch.
 Keyboard movement uses symmetric diagonals within the circular stick range,
 including after rounding to the game's input format. Adding a strafe key preserves
 the held axis. Releasing that first key uses a brief directional handoff (8 ms)
-at full stick strength. Releasing all movement keys stops keyboard input immediately;
-opposite movement keys cancel.
+at the current movement strength. Hold **Alt** to walk; release it to return to
+normal movement. Remap **Walk (hold)** on **Controls**. Releasing all movement keys
+stops keyboard input immediately; opposite movement keys cancel.
 
 Mouse sensitivity and invert Y are available in the launcher and in-game menu.
 Opening the port menu, name entry or switching windows releases capture; lock-on

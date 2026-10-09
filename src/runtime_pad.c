@@ -2,7 +2,7 @@
  * (gpu/shim/window.cpp); here state is only sampled.
  *
  * Keyboard layout (also with a gamepad connected: both drive the game):
- *   WASD left stick, arrow keys right stick, Space Cross, LShift Circle,
+ *   WASD left stick (hold either Alt to walk), arrow keys right stick, Space Cross, LShift Circle,
  *   E Square, Q Triangle, 1 L1, 3 R1, R L2, F R2, Z L3, C R3,
  *   Enter Options, Tab left touchpad, Backspace right touchpad,
  *   IJKL d-pad (I up, K down, J left, L right). */
@@ -141,20 +141,21 @@ static void report_guest_heap(void) {
  * key.<input>=<SDL key names> and pad.<input>=<SDL gamepad button names>, comma-separated,
  * replace an input's binding (empty: unbound). Inputs: the buttons (cross ... right, touchpad =
  * a left-side click, touchpad_right), and on the keyboard the sticks: move_* (left), look_*
- * (right). Gamepad names as SDL's: a b x y back start leftstick rightstick leftshoulder
+ * (right), walk (hold for reduced keyboard movement strength). Gamepad names as SDL's:
+ * a b x y back start leftstick rightstick leftshoulder
  * rightshoulder dpup dpdown dpleft dpright touchpad misc1 paddle1-4, plus lefttrigger and
  * righttrigger. The keyboard works next to a gamepad (the Steam Deck always has one): its buttons
- * add to the gamepad's, a held move/look key moves the stick all the way. */
+ * add to the gamepad's; move keys use the circular stick range, reduced while walking. */
 enum {
     IN_CROSS, IN_CIRCLE, IN_SQUARE, IN_TRIANGLE, IN_L1, IN_R1, IN_L2, IN_R2, IN_L3, IN_R3,
     IN_OPTIONS, IN_TOUCHPAD, IN_TOUCHPAD_RIGHT, IN_UP, IN_DOWN, IN_LEFT, IN_RIGHT,
     IN_MOVE_UP, IN_MOVE_DOWN, IN_MOVE_LEFT, IN_MOVE_RIGHT, IN_LOOK_UP, IN_LOOK_DOWN, IN_LOOK_LEFT,
-    IN_LOOK_RIGHT, IN_COUNT
+    IN_LOOK_RIGHT, IN_WALK, IN_COUNT
 };
 static const char *const input_names[IN_COUNT]={
     "cross","circle","square","triangle","l1","r1","l2","r2","l3","r3","options","touchpad",
     "touchpad_right","up","down","left","right","move_up","move_down","move_left","move_right",
-    "look_up","look_down","look_left","look_right",
+    "look_up","look_down","look_left","look_right","walk",
 };
 static const uint32_t input_buttons[IN_COUNT]={
     BTN_CROSS,BTN_CIRCLE,BTN_SQUARE,BTN_TRIANGLE,BTN_L1,BTN_R1,BTN_L2,BTN_R2,BTN_L3,BTN_R3,
@@ -182,6 +183,7 @@ static void bind_defaults(void) {
         {IN_MOVE_UP,SDL_SCANCODE_W}, {IN_MOVE_DOWN,SDL_SCANCODE_S}, {IN_MOVE_LEFT,SDL_SCANCODE_A},
         {IN_MOVE_RIGHT,SDL_SCANCODE_D}, {IN_LOOK_UP,SDL_SCANCODE_UP}, {IN_LOOK_DOWN,SDL_SCANCODE_DOWN},
         {IN_LOOK_LEFT,SDL_SCANCODE_LEFT}, {IN_LOOK_RIGHT,SDL_SCANCODE_RIGHT},
+        {IN_WALK,SDL_SCANCODE_LALT}, {IN_WALK,SDL_SCANCODE_RALT},
     };
     static const struct { int input, button; } pads[]={
         {IN_CROSS,SDL_GAMEPAD_BUTTON_SOUTH}, {IN_CIRCLE,SDL_GAMEPAD_BUTTON_EAST},
@@ -271,7 +273,7 @@ static uint8_t key_axis(uint8_t value, int negative, int positive) {
 /* Resolved digital directions, updated under the pad lock. Retain the first
  * held axis, then briefly favor the remaining axis when that first key lifts.
  * The existing input timestamp keeps repeated polls on the same handoff. */
-enum { KEY_MOVEMENT_HANDOFF_US=8000 };
+enum { KEY_MOVEMENT_HANDOFF_US=8000, KEY_WALK_RADIUS=48 };
 static struct {
     int x, y, horizontal;
     int handoff_x, handoff_y, handoff;
@@ -283,8 +285,10 @@ static void reset_key_movement(void) { memset(&key_movement_state,0,sizeof(key_m
  * Equal-error choices favor the already-held axis: vertical-first diagonals
  * use (90,91), horizontal-first use (91,90). Both retain near-full strength
  * and stay just below a 45-degree turn from their starting direction.
- * Controller-only samples remain untouched. */
-static void key_movement(PadData *d, int left, int right, int up, int down) {
+ * Walking uses the same rounding and handoff at a reduced radius; scaling an
+ * already rounded running diagonal would lose its held-axis priority.
+ * Controller-only samples remain untouched, even with the walk key held. */
+static void key_movement(PadData *d, int left, int right, int up, int down, int walk) {
     const int key_x=(right!=0)-(left!=0), key_y=(down!=0)-(up!=0);
     if (!(left || right || up || down)) { reset_key_movement(); return; }
     const int changed=key_x!=key_movement_state.x || key_y!=key_movement_state.y;
@@ -319,9 +323,10 @@ static void key_movement(PadData *d, int left, int right, int up, int down) {
         x=key_movement_state.handoff_x*128;
         y=key_movement_state.handoff_y*128;
     }
+    const int radius=walk ? KEY_WALK_RADIUS : 128;
     const int length2=x*x+y*y;
-    if (length2>128*128) {
-        const float scale=128.0f/SDL_sqrtf((float)length2);
+    if (length2>radius*radius) {
+        const float scale=(float)radius/SDL_sqrtf((float)length2);
         const float target_x=x*scale, target_y=y*scale;
         const int base_x=(int)target_x, base_y=(int)target_y;
         x=base_x; y=base_y;
@@ -332,7 +337,7 @@ static void key_movement(PadData *d, int left, int right, int up, int down) {
             const unsigned round=key_movement_state.horizontal && candidate<3 ? 3-candidate : candidate;
             const int cx=base_x+((round&2) ? (target_x<0 ? -1 : 1) : 0);
             const int cy=base_y+((round&1) ? (target_y<0 ? -1 : 1) : 0);
-            if (cx*cx+cy*cy>128*128) continue;
+            if (cx*cx+cy*cy>radius*radius) continue;
             const float candidate_error=(cx-target_x)*(cx-target_x)+(cy-target_y)*(cy-target_y);
             if (candidate_error<error) { x=cx; y=cy; error=candidate_error; }
         }
@@ -348,7 +353,7 @@ static void apply_keyboard(PadData *d, const bool *k, Uint32 mouse) {
     if (key_down(k,mouse,IN_L2)) d->l2=255;
     if (key_down(k,mouse,IN_R2)) d->r2=255;
     key_movement(d,key_down(k,mouse,IN_MOVE_LEFT),key_down(k,mouse,IN_MOVE_RIGHT),
-                 key_down(k,mouse,IN_MOVE_UP),key_down(k,mouse,IN_MOVE_DOWN));
+                 key_down(k,mouse,IN_MOVE_UP),key_down(k,mouse,IN_MOVE_DOWN),key_down(k,mouse,IN_WALK));
     d->right_x=key_axis(d->right_x,key_down(k,mouse,IN_LOOK_LEFT),key_down(k,mouse,IN_LOOK_RIGHT));
     d->right_y=key_axis(d->right_y,key_down(k,mouse,IN_LOOK_UP),key_down(k,mouse,IN_LOOK_DOWN));
 }
