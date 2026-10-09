@@ -21,6 +21,7 @@ VK_DEFINE_HANDLE(VmaAllocator)
 namespace Vulkan {
 
 class Instance {
+    bool ray_query_enabled = false;
 public:
     explicit Instance(bool validation = false, bool crash_diagnostic = false);
     explicit Instance(Frontend::WindowSDL& window, s32 physical_device_index,
@@ -43,6 +44,7 @@ public:
 
     /// Returns the current physical device
     /// bbport: device features the temporal upscaler reports as enabled.
+    bool IsRayQueryEnabled() const { return ray_query_enabled; }
     bool IsStorageImageWriteWithoutFormatEnabled() const {
         return features.shaderStorageImageWriteWithoutFormat;
     }

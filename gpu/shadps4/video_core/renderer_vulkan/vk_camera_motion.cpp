@@ -19,6 +19,15 @@
 #include "video_core/texture_cache/texture_cache.h"
 
 namespace Vulkan {
+RayGeometry::Camera CameraMotion::GeometryCamera() const {
+    return RayGeometry::MakeCamera(pass_camera.view, pass_camera.inv_view, raw_projection,
+                                   pass_camera.proj, pass_has_camera && pass_camera.valid);
+}
+RayGeometry::Camera CameraMotion::RayCamera() {
+    CommitFrameCamera();
+    return RayGeometry::MakeCamera(current.view, current.inv_view, current.proj,
+                                   current.proj, frame_has_camera && current.valid);
+}
 BbFrameCamera CameraMotion::FrameCamera() const {
     using Mat = std::array<float, 16>;
     const auto multiply = [](const Mat &a, const Mat &b) {
@@ -155,7 +164,7 @@ CameraMotion::CameraMotion(const Instance& instance_, Scheduler& scheduler_,
     const char* upscaler = std::getenv("BB_UPSCALER");
     // The upscaler can be switched on from the menu at any time: the camera is always tracked
     // unless BB_UPSCALER=none.
-    for_upscaler = !(upscaler && std::strcmp(upscaler, "none") == 0);
+    for_upscaler = RayGeometry::Requested() || !(upscaler && std::strcmp(upscaler, "none") == 0);
     const auto device = instance.GetDevice();
     if (for_upscaler) {
         const std::array<vk::DescriptorSetLayoutBinding, 3> motion_bindings = {{
@@ -409,6 +418,7 @@ void CameraMotion::OnConstants(const float* data) {
                         pass_camera.proj[1] < 0.0f ? "-y" : "+y");
         }
     }
+    raw_projection = {data[52], data[57], data[62], data[63]};
     pass_camera.valid = pass_camera.proj[0] != 0.0f && pass_camera.proj[1] != 0.0f;
     const std::array<u32, 2> size{u32(data[4]), u32(data[5])};
     if (size != render_size) {

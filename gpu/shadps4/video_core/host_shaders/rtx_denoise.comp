@@ -1,0 +1,52 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+#version 460
+#extension GL_EXT_samplerless_texture_functions : require
+layout(local_size_x=8,local_size_y=8) in;
+layout(binding=0) uniform texture2D radianceImage;
+layout(binding=1) uniform texture2D depthImage;
+layout(binding=2) uniform texture2D motionImage;
+layout(binding=3) uniform texture2D previousImage;
+layout(rgba16f,binding=4) writeonly uniform image2D historyImage;
+layout(rgba16f,binding=5) uniform image2D sceneImage;
+layout(std430,binding=6) readonly buffer Frame {
+    mat4 clipWorld, worldClip, previousClip;
+    vec4 camera, sun, sky; uvec4 options; vec4 control, jitter;
+} f;
+void main() {
+    ivec2 p=ivec2(gl_GlobalInvocationID.xy),size=ivec2(f.options.xy);
+    if(any(greaterThanEqual(p,size))) return;
+    float depth=texelFetch(depthImage,p,0).r;
+    // Device depth near 1 loses nearly all useful precision in RGBA16F history.
+    float linearDepth=depth<1?abs(f.jitter.w/(depth-f.jitter.z)):0;
+    vec4 center=texelFetch(radianceImage,p,0);
+    if(center.a<0) {
+        // Uncaptured/transparent surfaces and background must retain raster detail.
+        imageStore(historyImage,p,center);
+        return;
+    }
+    vec3 sum=vec3(0),low=vec3(60000),high=vec3(0);float weight=0;
+    for(int y=-1;y<=1;y++) for(int x=-1;x<=1;x++) {
+        ivec2 q=clamp(p+ivec2(x,y),ivec2(0),size-1);
+        vec4 sampleValue=texelFetch(radianceImage,q,0);
+        float w=exp(-abs(sampleValue.a-linearDepth)/max(0.01,0.015*linearDepth))*(x==0&&y==0?2:1);
+        sum+=sampleValue.rgb*w;weight+=w;
+        if(w>0.01) {low=min(low,sampleValue.rgb);high=max(high,sampleValue.rgb);}
+    }
+    vec3 color=sum/max(weight,0.000001);
+    vec2 motion=texelFetch(motionImage,p,0).xy;
+    ivec2 oldPixel=ivec2(round(vec2(p)+motion));
+    if(f.control.z>0.5&&all(greaterThanEqual(oldPixel,ivec2(0)))&&all(lessThan(oldPixel,size))) {
+        vec4 old=texelFetch(previousImage,oldPixel,0);
+        vec2 ndc=(vec2(p)+0.5-f.jitter.xy)/vec2(size)*2-1;
+        vec4 reprojected=f.previousClip*vec4(ndc,depth,1);
+        float predicted=linearDepth*reprojected.w;
+        if(reprojected.w>0&&abs(old.a-predicted)<max(0.02,0.02*predicted)) {
+            color=mix(color,clamp(old.rgb,low,high),0.85);
+        }
+    }
+    if(any(isnan(color))||any(isinf(color))) color=vec3(0);
+    color=clamp(color,vec3(0),vec3(60000));
+    imageStore(historyImage,p,vec4(color,min(linearDepth,60000)));
+    float alpha=imageLoad(sceneImage,p).a;
+    imageStore(sceneImage,p,vec4(color,alpha));
+}

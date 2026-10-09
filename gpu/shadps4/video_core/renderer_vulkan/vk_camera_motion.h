@@ -6,6 +6,7 @@
 #pragma once
 
 #include <array>
+#include "video_core/renderer_vulkan/ray_geometry.h"
 #include <vector>
 #include "../../../dlss_bridge/bbport_frame_camera.h"
 
@@ -68,6 +69,8 @@ public:
     /// (BB_DUMP_TRIGGER) for offline checks of the vectors.
     void PrintState(int frame) const;
     BbFrameCamera FrameCamera() const;
+    RayGeometry::Camera GeometryCamera() const;
+    RayGeometry::Camera RayCamera();
 
     /// Records the motion vector pass (Scheduler::Record): `depth_view` (depth aspect, General
     /// layout) into `motion_view` (RG16F storage, General), pixels, previous minus current.
@@ -112,6 +115,7 @@ private:
     /// bbport: the camera of the G-buffer pass in progress (OnConstants), committed as the frame's
     /// camera once per frame (CommitFrameCamera: the motion pass or the display pass).
     Camera pass_camera;
+    std::array<float, 4> raw_projection{};
     bool pass_has_camera = false;
     bool committed = false;
     u32 frame_gbuffer_passes = 0;

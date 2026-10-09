@@ -13,9 +13,9 @@
 
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
-static constexpr u32 ShaderBinaryVersion = 7u; // bbport: interpolated integer fix (Pascal)
-static constexpr u32 ShaderMetaVersion = 7u; // bbport: ImageResource::needs_native
-static constexpr u32 PipelineKeyVersion = 5u; // bbport: Info layout (ImageResource::needs_native)
+static constexpr u32 ShaderBinaryVersion = 8u; // native ray geometry instrumentation
+static constexpr u32 ShaderMetaVersion = 8u; // per-session ray capture buffer addresses
+static constexpr u32 PipelineKeyVersion = 6u; // optional ray geometry pipeline variant
 } // namespace Serialization
 
 namespace Vulkan {
@@ -118,7 +118,7 @@ bool LoadShaderMeta(Serialization::Archive& ar, Shader::Info& info,
 
     // Motion vertex shaders embed session-local buffer device addresses. They must be
     // recompiled for the current allocation, never loaded from a previous process.
-    if (info.hw_stage == Shader::HwStage::Vertex && spec.runtime_info.hw.vs.motion_vectors) {
+    if (info.hw_stage == Shader::HwStage::Vertex && (spec.runtime_info.hw.vs.motion_vectors || spec.runtime_info.hw.vs.ray_params_address)) {
         return false;
     }
 

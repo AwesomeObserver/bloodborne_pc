@@ -76,7 +76,7 @@ static void EmitVertexMotion(EmitContext& ctx) {
     const Id param_ptr = ctx.OpAccessChain(ctx.TypePointer(spv::StorageClass::PushConstant, u32_type),
                                            ctx.push_data_block,
                                            ctx.ConstU32(PushData::MotionParamIndex));
-    const Id param_index = ctx.OpLoad(u32_type, param_ptr);
+    const Id param_index = ctx.OpBitwiseAnd(u32_type, ctx.OpLoad(u32_type, param_ptr), ctx.ConstU32(0xffffu));
     const auto address = [&](u64 base, Id index, u32 stride) {
         return ctx.OpIAdd(ctx.U64, ctx.Constant(ctx.U64, base),
                           ctx.OpIMul(ctx.U64, ctx.OpUConvert(ctx.U64, index),
@@ -186,7 +186,55 @@ static void EmitFragmentMotion(EmitContext& ctx) {
                     ctx.OpSelect(f32_type, front, dy, zero), valid, depth}));
 }
 
+// Capture post-skinning positions in world space, entirely on the GPU. The high half
+// of motion_param shares the existing 128-byte push block; zero disables capture.
+static void EmitVertexRayGeometry(EmitContext& ctx) {
+    const Id u = ctx.U32[1], f = ctx.F32[1], b = ctx.U1[1];
+    const auto addr = [&](u64 base, Id index, u32 stride) {
+        return ctx.OpIAdd(ctx.U64, ctx.Constant(ctx.U64, base),
+            ctx.OpIMul(ctx.U64, ctx.OpUConvert(ctx.U64,index),ctx.Constant(ctx.U64,u64(stride))));
+    };
+    const Id ptr=ctx.OpAccessChain(ctx.TypePointer(spv::StorageClass::PushConstant,u),ctx.push_data_block,
+                                  ctx.ConstU32(PushData::MotionParamIndex));
+    const Id param=ctx.OpShiftRightLogical(u,ctx.OpLoad(u,ptr),ctx.ConstU32(16u));
+    const u64 base=ctx.runtime_info.hw.vs.ray_params_address;
+    const Id up=ctx.TypePointer(spv::StorageClass::PhysicalStorageBuffer,ctx.U32[4]);
+    const Id fp=ctx.TypePointer(spv::StorageClass::PhysicalStorageBuffer,ctx.F32[4]);
+    const Id range=ctx.OpLoad(ctx.U32[4],ctx.OpConvertUToPtr(up,addr(base,param,96)),spv::MemoryAccessMask::Aligned,16u);
+    const Id counts=ctx.OpLoad(ctx.U32[4],ctx.OpConvertUToPtr(up,addr(base+16,param,96)),spv::MemoryAccessMask::Aligned,16u);
+    auto x=[&](Id v,u32 n){ return ctx.OpCompositeExtract(u,v,n); };
+    const Id vertex=ctx.OpISub(u,ctx.OpLoad(u,ctx.vertex_index),x(range,2));
+    const Id inst=ctx.OpISub(u,ctx.OpLoad(u,ctx.instance_id),x(range,3));
+    const Id valid=ctx.OpLogicalAnd(b,ctx.OpULessThan(b,vertex,x(range,1)),ctx.OpULessThan(b,inst,x(counts,0)));
+    const Id start=ctx.OpLabel(),end=ctx.OpLabel();
+    ctx.OpSelectionMerge(end,spv::SelectionControlMask::MaskNone);ctx.OpBranchConditional(valid,start,end);ctx.AddLabel(start);
+    const Id position=ctx.OpLoad(ctx.F32[4],ctx.output_position);
+    const Id ip=ctx.OpLoad(ctx.F32[4],ctx.OpConvertUToPtr(fp,addr(base+80,param,96)),spv::MemoryAccessMask::Aligned,16u);
+    const Id vx=ctx.OpFMul(f,ctx.OpCompositeExtract(f,position,0u),ctx.OpCompositeExtract(f,ip,0u));
+    const Id vy=ctx.OpFMul(f,ctx.OpCompositeExtract(f,position,1u),ctx.OpCompositeExtract(f,ip,1u));
+    const Id vz=ctx.OpCompositeExtract(f,position,3u);
+    const Id slot=ctx.OpIAdd(u,x(range,0),ctx.OpIAdd(u,vertex,ctx.OpIMul(u,inst,x(range,1))));
+    const Id dst=addr(ctx.runtime_info.hw.vs.ray_positions_address,slot,16);
+    const Id scalar=ctx.TypePointer(spv::StorageClass::PhysicalStorageBuffer,u);
+    const Id scope=ctx.ConstU32(static_cast<u32>(spv::Scope::Device));
+    for(u32 row=0;row<4;row++) {
+        Id value=ctx.Constant(f,1.f);
+        if(row<3) {
+            const Id m=ctx.OpLoad(ctx.F32[4],ctx.OpConvertUToPtr(fp,addr(base+32+row*16,param,96)),spv::MemoryAccessMask::Aligned,16u);
+            value=ctx.OpFAdd(f,ctx.OpFAdd(f,ctx.OpFMul(f,vx,ctx.OpCompositeExtract(f,m,0u)),ctx.OpFMul(f,vy,ctx.OpCompositeExtract(f,m,1u))),
+                ctx.OpFAdd(f,ctx.OpFMul(f,vz,ctx.OpCompositeExtract(f,m,2u)),ctx.OpCompositeExtract(f,m,3u)));
+            const Id finite=ctx.OpLogicalAnd(b,ctx.OpFOrdGreaterThan(b,value,ctx.Constant(f,-1e20f)),
+                                                ctx.OpFOrdLessThan(b,value,ctx.Constant(f,1e20f)));
+            value=ctx.OpSelect(f,finite,value,ctx.Constant(f,0.f));
+        }
+        const Id out=ctx.OpConvertUToPtr(scalar,ctx.OpIAdd(ctx.U64,dst,ctx.Constant(ctx.U64,u64(row*4))));
+        ctx.OpAtomicExchange(u,out,scope,ctx.u32_zero_value,ctx.OpBitcast(u,value));
+    }
+    ctx.OpBranch(end);ctx.AddLabel(end);
+}
+
 void EmitEpilogue(EmitContext& ctx) {
+    if (ctx.VertexRayGeometry()) EmitVertexRayGeometry(ctx);
     if (Sirit::ValidId(ctx.motion_out_cur)) {
         EmitVertexMotion(ctx);
     }

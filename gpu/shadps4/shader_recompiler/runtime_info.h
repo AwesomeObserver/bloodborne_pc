@@ -113,6 +113,7 @@ struct HwVertexRuntimeInfo {
     u32 user_clip_plane_mask{};
     /// bbport: object motion vectors (G-buffer draws), see MotionVectors below.
     bool motion_vectors{};
+    u64 ray_params_address{}, ray_positions_address{};
 
     bool operator==(const HwVertexRuntimeInfo& other) const noexcept = default;
 };

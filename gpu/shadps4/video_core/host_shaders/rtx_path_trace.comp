@@ -1,0 +1,140 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+#version 460
+#extension GL_EXT_ray_query : require
+#extension GL_EXT_samplerless_texture_functions : require
+layout(local_size_x=8,local_size_y=8) in;
+layout(binding=0) uniform accelerationStructureEXT sceneAs;
+layout(std430,binding=1) readonly buffer Vertices { vec4 vertices[]; };
+layout(std430,binding=2) readonly buffer Indices { uint indices[]; };
+layout(std430,binding=3) readonly buffer Frame {
+    mat4 clipWorld, worldClip, previousClip;
+    vec4 camera, sun, sky;
+    uvec4 options;
+    vec4 control, jitter;
+} f;
+layout(binding=4) uniform texture2D albedoImage;
+layout(binding=5) uniform texture2D depthImage;
+layout(rgba16f,binding=6) writeonly uniform image2D radianceImage;
+layout(binding=7) uniform texture2D colorImage;
+const float PI=3.14159265359;
+uint rng;
+float randomValue() {
+    rng ^= rng<<13; rng ^= rng>>17; rng ^= rng<<5;
+    return float(rng>>8)*(1.0/16777216.0);
+}
+vec3 hemisphere(vec3 n) {
+    float phi=2*PI*randomValue(), r=sqrt(randomValue());
+    vec3 tangent=normalize(cross(abs(n.y)<0.99?vec3(0,1,0):vec3(1,0,0),n));
+    return normalize(tangent*(r*cos(phi))+cross(n,tangent)*(r*sin(phi))+n*sqrt(max(0,1-r*r)));
+}
+vec3 brdf(vec3 color,vec3 n,vec3 view,vec3 incoming,out float pdf) {
+    float nl=max(dot(n,incoming),0),nv=max(dot(n,view),0.00001);
+    vec3 h=normalize(view+incoming);
+    float nh=max(dot(n,h),0),vh=max(dot(view,h),0.00001);
+    float alpha=max(f.control.w*f.control.w,0.01),a2=alpha*alpha;
+    float denominator=nh*nh*(a2-1)+1;
+    float distribution=a2/(PI*denominator*denominator);
+    float k=(f.control.w+1)*(f.control.w+1)/8;
+    float visibility=(nl/(nl*(1-k)+k))*(nv/(nv*(1-k)+k));
+    vec3 fresnel=vec3(0.04)+vec3(0.96)*pow(1-vh,5);
+    pdf=0.8*nl/PI+0.2*distribution*nh/(4*vh);
+    return color*(1-fresnel)/PI+fresnel*distribution*visibility/max(4*nl*nv,0.00001);
+}
+vec3 nextDirection(vec3 n,vec3 view) {
+    if(randomValue()>0.2)return hemisphere(n);
+    float phi=2*PI*randomValue(),u=randomValue(),alpha=max(f.control.w*f.control.w,0.01);
+    float cosine=sqrt((1-u)/(1+(alpha*alpha-1)*u)),sine=sqrt(max(0,1-cosine*cosine));
+    vec3 tangent=normalize(cross(abs(n.y)<0.99?vec3(0,1,0):vec3(1,0,0),n));
+    vec3 halfVector=normalize(tangent*(sine*cos(phi))+cross(n,tangent)*(sine*sin(phi))+n*cosine);
+    return reflect(-view,halfVector);
+}
+bool hit(vec3 origin,vec3 direction,float limit,out float t,out uint primitive) {
+    rayQueryEXT q;
+    rayQueryInitializeEXT(q,sceneAs,gl_RayFlagsOpaqueEXT,255,origin,0.002,direction,limit);
+    while(rayQueryProceedEXT(q)) {}
+    if(rayQueryGetIntersectionTypeEXT(q,true)==gl_RayQueryCommittedIntersectionNoneEXT) return false;
+    t=rayQueryGetIntersectionTEXT(q,true); primitive=rayQueryGetIntersectionPrimitiveIndexEXT(q,true);return true;
+}
+bool shadow(vec3 origin,vec3 direction) {
+    rayQueryEXT q;
+    rayQueryInitializeEXT(q,sceneAs,gl_RayFlagsOpaqueEXT|gl_RayFlagsTerminateOnFirstHitEXT,
+                          255,origin,0.003,direction,3000.0);
+    while(rayQueryProceedEXT(q)) {}
+    return rayQueryGetIntersectionTypeEXT(q,true)!=gl_RayQueryCommittedIntersectionNoneEXT;
+}
+vec3 material(vec3 p) {
+    vec4 projected=f.worldClip*vec4(p,1);
+    if(projected.w<=0) return vec3(0.4);
+    vec3 ndc=projected.xyz/projected.w;
+    ivec2 size=textureSize(depthImage,0);
+    vec2 pixel=(ndc.xy*0.5+0.5)*vec2(size)+f.jitter.xy;
+    if(any(lessThan(pixel,vec2(0)))||any(greaterThanEqual(pixel,vec2(size)))) return vec3(0.4);
+    float d=texelFetch(depthImage,ivec2(pixel),0).r;
+    if(abs(ndc.z-d)>max(0.000005,0.025*abs(1.0-d))) return vec3(0.4);
+    vec2 uv=pixel/vec2(size);
+    vec3 a=texelFetch(albedoImage,clamp(ivec2(uv*textureSize(albedoImage,0)),ivec2(0),textureSize(albedoImage,0)-1),0).rgb;
+    return clamp(a,vec3(0.015),vec3(0.98));
+}
+vec3 environment(vec3 d) { return f.sky.rgb*f.sky.w*(0.4+0.6*max(d.y,0)); }
+void main() {
+    ivec2 pixel=ivec2(gl_GlobalInvocationID.xy), size=ivec2(f.options.xy);
+    if(any(greaterThanEqual(pixel,size))) return;
+    vec4 original=texelFetch(colorImage,pixel,0);
+    float depth=texelFetch(depthImage,pixel,0).r;
+    vec3 value=original.rgb;
+    bool tracedPixel=false;
+    if(depth>0.000001&&depth<1.0) {
+        rng=(uint(pixel.x)+uint(pixel.y)*f.options.x)*747796405u+uint(f.control.x)*2891336453u+277803737u;
+        vec3 sum=vec3(0); uint accepted=0;
+        for(uint sampleIndex=0;sampleIndex<f.options.z;sampleIndex++) {
+            vec2 noise=f.options.z>1?vec2(randomValue(),randomValue())-0.5:vec2(0);
+            vec2 ndc=(vec2(pixel)+0.5-f.jitter.xy+noise)/vec2(size)*2-1;
+            vec4 point=f.clipWorld*vec4(ndc,depth,1);
+            vec3 primary=point.xyz/point.w;
+            vec3 origin=f.camera.xyz, direction=normalize(primary-origin);
+            vec3 throughput=vec3(1), light=vec3(0);
+            bool valid=true;
+            for(uint bounce=0;bounce<f.options.w;bounce++) {
+                float t; uint primitive;
+                if(!hit(origin,direction,3000,t,primitive)) {
+                    if(bounce==0) { valid=false; break; }
+                    light+=throughput*environment(direction);break;
+                }
+                vec3 p=origin+t*direction;
+                if(bounce==0&&length(p-primary)>max(0.07,0.015*length(primary-f.camera.xyz))) {valid=false;break;}
+                uvec3 ids=uvec3(indices[primitive*3],indices[primitive*3+1],indices[primitive*3+2]);
+                vec3 a=vertices[ids.x].xyz,b=vertices[ids.y].xyz,c=vertices[ids.z].xyz;
+                vec3 crossValue=cross(b-a,c-a);
+                if(dot(crossValue,crossValue)<1e-14) {valid=false;break;}
+                vec3 normal=normalize(crossValue);if(dot(normal,direction)>0) normal=-normal;
+                vec3 color=material(p);
+                vec3 sunDirection=normalize(f.sun.xyz);
+                float cosine=max(dot(normal,sunDirection),0);
+                float pdf;
+                if((f.control.y<1.5||bounce>0)&&cosine>0&&!shadow(p+normal*0.008,sunDirection))
+                    light+=throughput*brdf(color,normal,-direction,sunDirection,pdf)*(cosine*f.sun.w);
+                vec3 next=nextDirection(normal,-direction);
+                float nl=max(dot(normal,next),0);
+                if(nl<=0)break;
+                vec3 reflectance=brdf(color,normal,-direction,next,pdf);
+                throughput*=reflectance*nl/max(pdf,0.000001);
+                if(bounce>=2) {
+                    float probability=clamp(max(max(throughput.r,throughput.g),throughput.b),0.1,0.9);
+                    if(randomValue()>probability) break;
+                    throughput/=probability;
+                }
+                origin=p+normal*0.008;direction=next;
+            }
+            if(valid) {sum+=light;accepted++;}
+        }
+        if(accepted>0) {
+            tracedPixel=true;
+            vec3 traced=sum/float(accepted);
+            value=f.control.y>1.5?original.rgb+traced*0.35:traced;
+        }
+    }
+    if(any(isnan(value))||any(isinf(value))) value=vec3(0);
+    float linearDepth=depth<1?abs(f.jitter.w/(depth-f.jitter.z)):0;
+    float tag=tracedPixel?min(linearDepth,60000):-max(min(linearDepth,60000),0.001);
+    imageStore(radianceImage,pixel,vec4(clamp(value,vec3(0),vec3(60000)),tag));
+}

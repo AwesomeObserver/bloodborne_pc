@@ -3,6 +3,7 @@
 #include "video_core/renderer_vulkan/vk_gpu_profiler.h"
 #include "video_core/renderer_vulkan/motion_history.h"
 #include "video_core/renderer_vulkan/vk_scene_resolution.h"
+#include "video_core/renderer_vulkan/vk_path_tracer.h"
 #include "video_core/renderer_vulkan/ui_composition.h"
 
 #include <algorithm>
@@ -189,7 +190,7 @@ TemporalUpscaler::TemporalUpscaler(const Instance& instance_, Scheduler& schedul
     }
     // Available unless BB_UPSCALER=none; on/off and the parameters are the menu's settings.
     const char* env = std::getenv("BB_UPSCALER");
-    enabled = !(env && std::strcmp(env, "none") == 0);
+    enabled = RayGeometry::Requested() || !(env && std::strcmp(env, "none") == 0);
     if (const char* hash = std::getenv("BB_UPSCALE_BEFORE_CS")) {
         trigger_hash = std::strtoull(hash, nullptr, 16);
     }
@@ -402,6 +403,7 @@ bool TemporalUpscaler::OnFrameStart() {
     ui_phase = false;
     ui_read_barrier = false;
     done_this_frame = false;
+    ray_done_this_frame = false;
     ldr_target = {};
     scene_color = {};
     snapshot_taken = false;
@@ -422,6 +424,9 @@ bool TemporalUpscaler::OnFrameStart() {
 }
 
 void TemporalUpscaler::OnDispatch(u64 cs_hash) {
+    if (cs_hash == trigger_hash && !ray_done_this_frame && path_tracer && scene_color) {
+        ray_done_this_frame = path_tracer->Render(scene_color);
+    }
     if (cs_hash != trigger_hash || done_this_frame || failed || Scaled()) {
         return;
     }

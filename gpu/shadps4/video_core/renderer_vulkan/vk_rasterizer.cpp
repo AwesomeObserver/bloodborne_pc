@@ -69,6 +69,9 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
     camera_motion->SetObjectMotion(object_motion.get());
     upscaler = std::make_unique<TemporalUpscaler>(instance, scheduler, texture_cache, runtime,
                                                   *camera_motion, *scene_targets);
+    path_tracer = std::make_unique<PathTracer>(instance, scheduler, *camera_motion,
+                                               texture_cache, runtime, *scene_targets);
+    upscaler->SetPathTracer(path_tracer.get());
     if (!EmulatorSettings.IsNullGPU()) {
         liverpool->BindRasterizer(this);
     }
@@ -566,6 +569,14 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
         const auto& vp = regs.viewports[0];
         camera_motion->OnGBufferPass(db_desc.first, vp.xscale < 0.0f ? -1.0f : 1.0f,
                                      vp.yscale < 0.0f ? -1.0f : 1.0f);
+        if (path_tracer->Enabled()) {
+            for (const auto& [id, desc] : cb_descs) {
+                if (id && texture_cache.GetImage(id).info.pixel_format == vk::Format::eR8G8B8A8Srgb) {
+                    path_tracer->SetAlbedo(id, db_desc.first);
+                    break;
+                }
+            }
+        }
     }
     if (upscaler->Enabled() && cb_descs[0].first) {
         upscaler->OnColorTarget(cb_descs[0].first);
@@ -1456,6 +1467,7 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
         }
         camera_motion->SetJitter(upscaler->Jitter());
         object_motion->OnFrameStart();
+        path_tracer->BeginFrame();
         NoteFrameStart();
         static const char* scene_debug = std::getenv("BB_SCENE_DEBUG");
         scene_debug_frame = scene_debug && std::remove(scene_debug) == 0;
@@ -1466,6 +1478,7 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     motion_geometry = 0;
 
     PrepareRenderState(pipeline);
+    push_data.motion_param = 0;
     if (upscaler->Enabled() && std::popcount(pipeline->GetGraphicsKey().mrt_mask) == 1) {
         const auto& viewport = Regs().viewports[0];
         upscaler->OnDraw(pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash,
@@ -1588,6 +1601,25 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
             });
         }
     }
+    if (path_tracer->Enabled() && pipeline->GetGraphicsKey().ray_geometry &&
+        regs.primitive_type == AmdGpu::PrimitiveType::TriangleList && !regs.enable_primitive_restart) {
+        const auto& vs = pipeline->GetStage(Shader::SwStage::Vertex);
+        const auto [base_vertex, first_instance] = GetDrawOffsets(regs, vs, pipeline->GetFetchShader());
+        const u32 instances = regs.num_instances.NumInstances();
+        u32 param = 0;
+        if (is_indexed) {
+            const u32 size = regs.index_buffer_type.index_type == AmdGpu::IndexType::Index16 ? 2u : 4u;
+            const VAddr address = regs.index_base_address.Address<VAddr>() + u64(index_offset) * size;
+            const u64 bytes = u64(regs.num_indices) * size;
+            if (memory->IsValidGpuMapping(address, 0) && memory->ClampRangeSize(address, bytes) == bytes) {
+                param = size == 2 ? path_tracer->Capture(std::span(reinterpret_cast<const u16*>(address), regs.num_indices), base_vertex, instances, first_instance)
+                                  : path_tracer->Capture(std::span(reinterpret_cast<const u32*>(address), regs.num_indices), base_vertex, instances, first_instance);
+            }
+        } else {
+            param = path_tracer->CaptureNonIndexed(regs.num_indices, base_vertex, instances, first_instance);
+        }
+        push_data.motion_param = (push_data.motion_param & 0xffffu) | (param << 16);
+    }
     {
         BB_SECTION(PipelineBind);
         pipeline->BindResources(set_writes, push_data, {image_infos.data(), image_infos.size()},
@@ -1694,6 +1726,7 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     // Indirect arguments may be GPU-written: leave these draws on camera fallback.
     motion_draw = false;
     motion_geometry = 0;
+    push_data.motion_param = 0;
     PrepareRenderState(pipeline);
     if (upscaler->Enabled() && std::popcount(pipeline->GetGraphicsKey().mrt_mask) == 1) {
         const auto& viewport = Regs().viewports[0];
