@@ -25,6 +25,8 @@ def merge_one(src: Path, dest: Path) -> tuple[int, int]:
     for file in src.rglob("*"):
         if not file.is_file() or file.suffix.lower() not in EXTS:
             continue
+        if file.name == "vk_pipeline_cache.bin":
+            continue
         out = dest / file.relative_to(src)
         if out.exists():
             skipped += 1

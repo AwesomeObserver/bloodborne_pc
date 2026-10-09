@@ -29,6 +29,9 @@ public:
     /// `family` selects the read-only bundled overlay (`cache_bundled/<family>/<serial>`).
     void Open(std::string_view family = {});
     void Close();
+    /// Copies the on-disk blobs into `cache_collect` and `cache_bundled` without stopping the
+    /// writer. The window thread calls this before `_Exit`, which skips `Close()`.
+    void CollectForExit();
     [[nodiscard]] bool IsOpened() const {
         return opened;
     }

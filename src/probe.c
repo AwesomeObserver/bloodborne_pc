@@ -459,7 +459,9 @@ void runtime_restart(void) {
         fprintf(stderr,"runtime_restart: CreateProcess failed (%lu)\n",GetLastError()); _exit(1);
     }
     CloseHandle(process.hThread); CloseHandle(process.hProcess);
-    /* The new launch waits for this process's GPU device to go away (run.py --after). */
+    /* The new launch waits for this process's GPU device to go away (run.py --after).
+     * TerminateProcess skips destructors, so publish the shader cache first. */
+    bbgpu_collect_cache();
     TerminateProcess(GetCurrentProcess(),0);
 #else
     puts("Runtime: restarting through run.sh");

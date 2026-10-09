@@ -33,6 +33,7 @@
 #include "core/memory.h"
 #include "core/signals.h"
 #include "sdl_window.h"
+#include "video_core/cache_storage.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 
 extern "C" {
@@ -260,6 +261,10 @@ static void StartProfileWriter() {
 }
 #endif
 
+extern "C" void bbgpu_collect_cache(void) {
+    Storage::DataBase::Instance().CollectForExit();
+}
+
 extern "C" int bbgpu_init(const BbGpuConfig* config) {
     BbSettings::Load();
 #ifdef BB_PGO_GENERATE
@@ -288,6 +293,8 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
             SDL_WaitEventTimeout(nullptr, 8);
         }
         LOG_INFO(Frontend, "Window closed by user");
+        // `_Exit` skips Rasterizer's destructor, which is what normally publishes the cache.
+        Storage::DataBase::Instance().CollectForExit();
         std::fflush(stdout);
         std::_Exit(0);
     });

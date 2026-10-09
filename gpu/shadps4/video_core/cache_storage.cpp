@@ -125,6 +125,91 @@ void DataBase::Open(std::string_view family_name) {
     opened = true;
 }
 
+/// Shader blobs only. `vk_pipeline_cache.bin` shares the .bin suffix and is the driver's own
+/// cache: it must not be shipped.
+static bool IsBundledShaderBlob(const std::filesystem::path& path) {
+    if (path.filename() == "vk_pipeline_cache.bin") {
+        return false;
+    }
+    const auto ext = path.extension().string();
+    return ext == ".spv" || ext == ".meta" || ext == ".key" || ext == ".bin";
+}
+
+/// Adds blobs that the destination does not already have. An existing file stays, so a later
+/// session only contributes pipelines it saw for the first time.
+static u64 MergeNewShaderBlobs(const std::filesystem::path& src, const std::filesystem::path& dest) {
+    std::error_code ec;
+    std::filesystem::create_directories(dest, ec);
+    if (ec) {
+        return 0;
+    }
+    u64 copied = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(src, ec)) {
+        ec.clear();
+        if (!entry.is_regular_file(ec) || !IsBundledShaderBlob(entry.path())) {
+            continue;
+        }
+        const auto out = dest / entry.path().filename();
+        if (std::filesystem::exists(out)) {
+            continue;
+        }
+        std::filesystem::copy_file(entry.path(), out, ec);
+        if (!ec) {
+            ++copied;
+        }
+    }
+    return copied;
+}
+
+static void PublishCollectedCache(const std::filesystem::path& cache_path, const std::string& family) {
+    if (!EmulatorSettingsImpl::Flag("BB_CACHE_COLLECT", true) || family.empty() ||
+        !std::filesystem::exists(cache_path)) {
+        return;
+    }
+    using namespace Common::FS;
+    const auto serial = cache_path.filename();
+    const auto collect = GetUserPath(PathType::UserDir) / "cache_collect" / family / serial;
+    std::error_code ec;
+    std::filesystem::create_directories(collect, ec);
+    ec.clear();
+    u64 copied = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(cache_path, ec)) {
+        ec.clear();
+        if (!entry.is_regular_file(ec)) {
+            continue;
+        }
+        const auto name = entry.path().filename();
+        if (name.extension() == ".tmp") {
+            continue;
+        }
+        std::filesystem::copy_file(entry.path(), collect / name,
+                                   std::filesystem::copy_options::overwrite_existing, ec);
+        if (!ec) {
+            ++copied;
+        }
+    }
+    const auto bundled_name = std::filesystem::path{"cache_bundled"} / family / serial;
+    const u64 into_exe = MergeNewShaderBlobs(cache_path, GetProcessDirectory() / bundled_name);
+    const u64 into_user =
+        MergeNewShaderBlobs(cache_path, GetUserPath(PathType::UserDir) / bundled_name);
+    LOG_INFO(Render,
+             "Collected shader cache ({} files) to {}; bundled {} next to the exe, {} in the user dir",
+             copied, collect.string(), into_exe, into_user);
+    std::printf("Collected shader cache (%llu files) to %s; bundled %llu new next to the exe, "
+                "%llu in the user dir\n",
+                static_cast<unsigned long long>(copied), collect.string().c_str(),
+                static_cast<unsigned long long>(into_exe),
+                static_cast<unsigned long long>(into_user));
+    std::fflush(stdout);
+}
+
+void DataBase::CollectForExit() {
+    if (!IsOpened() || EmulatorSettings.IsPipelineCacheArchived()) {
+        return;
+    }
+    PublishCollectedCache(cache_path, family);
+}
+
 void DataBase::Close() {
     if (!IsOpened()) {
         return;
@@ -136,27 +221,8 @@ void DataBase::Close() {
     if (EmulatorSettings.IsPipelineCacheArchived()) {
         mz_zip_writer_finalize_archive(&zip_ar);
         mz_zip_writer_end(&zip_ar);
-    } else if (EmulatorSettingsImpl::Flag("BB_CACHE_COLLECT", false) && !family.empty() &&
-               std::filesystem::exists(cache_path)) {
-        using namespace Common::FS;
-        const auto dest = GetUserPath(PathType::UserDir) / "cache_collect" / family /
-                          cache_path.filename();
-        std::error_code ec;
-        std::filesystem::create_directories(dest, ec);
-        u64 copied = 0;
-        for (const auto& entry : std::filesystem::directory_iterator(cache_path, ec)) {
-            if (!entry.is_regular_file(ec)) {
-                continue;
-            }
-            std::filesystem::copy_file(entry.path(), dest / entry.path().filename(),
-                                       std::filesystem::copy_options::overwrite_existing, ec);
-            if (!ec) {
-                ++copied;
-            }
-        }
-        LOG_INFO(Render, "Collected shader cache ({} files) to {}", copied, dest.string());
-        std::printf("Collected shader cache (%llu files) to %s\n",
-                    static_cast<unsigned long long>(copied), dest.string().c_str());
+    } else {
+        PublishCollectedCache(cache_path, family);
     }
 
     opened = false;
