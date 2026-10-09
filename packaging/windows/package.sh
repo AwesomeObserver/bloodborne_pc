@@ -7,7 +7,7 @@
 set -euo pipefail
 cd -- "$(dirname -- "$0")/../.."
 source ./msys2-env.sh
-[[ -f out/bb-probe.exe && -f out/bb-gpu-capabilities.exe && -f out/bb-play.exe ]] || { echo 'Build first: bash build.sh' >&2; exit 1; }
+[[ -f out/bb-probe.exe && -f out/bb-gpu-capabilities.exe && -f out/bb-play.exe && -f out/bb-crash-monitor.exe ]] || { echo 'Build first: bash build.sh' >&2; exit 1; }
 
 # A Windows Python (not MSYS2's) for PyInstaller.
 python=${WINPYTHON:-}
@@ -45,11 +45,11 @@ cp -r out/pyi-dist/Bloodborne/. "$dest/"
 llvm-strip -o "$dest/Play Bloodborne.exe" out/bb-play.exe
 cp launcher/bloodborne.ico launcher/bloodborne.png "$dest/launcher/"
 # The executables without debug information (out/ keeps the symbols for crash reports).
-for exe in bb-probe.exe bb-gpu-capabilities.exe; do
+for exe in bb-probe.exe bb-gpu-capabilities.exe bb-crash-monitor.exe; do
     llvm-strip --strip-debug -o "$dest/bin/$exe" "out/$exe"
 done
 # Every DLL the executables load from the CLANG64 tree (SDL3, FFmpeg, Vulkan loader, ...).
-ldd "$dest/bin/bb-probe.exe" "$dest/bin/bb-gpu-capabilities.exe" |
+ldd "$dest/bin/bb-probe.exe" "$dest/bin/bb-gpu-capabilities.exe" "$dest/bin/bb-crash-monitor.exe" |
     awk '/\/clang64\/bin\// {print $3}' | sort -u | while read -r dll; do
         cp -u "$dll" "$dest/bin/"
     done
@@ -58,6 +58,7 @@ cp run.py LICENSE VERSION.txt README.md packaging/windows/README-Windows.txt "$d
 cp "packaging/windows/Trace Mouse Camera.cmd" "$dest/"
 cp "packaging/windows/Trace Keyboard Movement.cmd" "$dest/"
 cp "packaging/windows/Trace Respawn Loading.cmd" "$dest/"
+cp "packaging/windows/Trace Crash.cmd" "$dest/"
 mkdir -p "$dest/licenses"
 cp gpu/third_party/fsr-vulkan/LICENSE.txt "$dest/licenses/FSR-Vulkan-LICENSE.txt"
 cp gpu/third_party/fsr-vulkan/upstream/ffx-1.1.4/sdk/LICENSE.txt "$dest/licenses/FidelityFX-SDK-LICENSE.txt"

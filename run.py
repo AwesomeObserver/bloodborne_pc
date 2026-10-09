@@ -52,7 +52,7 @@ def run_script(name, *args, capture=False):
     command = [sys.executable, *script, str(PORT / 'scripts' / name), *map(str, args)]
     if capture:
         result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True,
-                                creationflags=no_console())
+                                encoding='utf-8', errors='replace', creationflags=no_console())
         if result.returncode:
             sys.exit(result.returncode)
         return result.stdout
@@ -109,8 +109,15 @@ def configure_runtime(env, fps, data):
 
 
 def launch_probe(command, log_path=None):
+    if os.environ.get('BB_CRASH_MONITOR') == '1':
+        monitor = find_executable('bb-crash-monitor.exe')
+        if not monitor:
+            fail('bb-crash-monitor.exe missing; use the complete crash diagnostics package.')
+        command = [str(monitor), *command]
+        print('Crash monitor: enabled for this launch (diagnostic mode)', flush=True)
     if log_path is None:
-        return subprocess.run(command, stdin=subprocess.DEVNULL, creationflags=no_console()).returncode
+        code = subprocess.run(command, stdin=subprocess.DEVNULL, creationflags=no_console()).returncode
+        return report_native_exit(code)
     print(f'Log: {log_path}')
     with Path(log_path).open('w', encoding='utf-8') as log:
         with subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -120,7 +127,18 @@ def launch_probe(command, log_path=None):
                 log.write(line)
                 log.flush()
                 print(line, end='', flush=True)
-            return process.wait()
+            return report_native_exit(process.wait(), log)
+
+
+def report_native_exit(code, log=None):
+    """Preserve Windows DWORD status through Python's signed C-long SystemExit."""
+    status = code & 0xffffffff
+    message = f'Native process exited: {status} (0x{status:08x})\n'
+    print(message, end='', flush=True)
+    if log is not None:
+        log.write(message)
+        log.flush()
+    return status if status < 0x80000000 else status - 0x100000000
 
 
 def main():

@@ -77,7 +77,7 @@ def run_role(argv):
     attach_stdio()
     for stream in (sys.stdout, sys.stderr):  # keep messages in order with the game's output
         try:
-            stream.reconfigure(line_buffering=True)
+            stream.reconfigure(encoding='utf-8', errors='replace', line_buffering=True)
         except (AttributeError, ValueError):
             pass
     if argv[0] == '--script':
@@ -88,7 +88,10 @@ def run_role(argv):
     try:
         runpy.run_path(path, run_name='__main__')
     except SystemExit as stop:
-        return stop.code if isinstance(stop.code, int) else (0 if stop.code is None else 1)
+        if isinstance(stop.code, int):
+            status = stop.code & 0xffffffff
+            return status if status < 0x80000000 else status - 0x100000000
+        return 0 if stop.code is None else 1
     return 0
 
 
@@ -1597,7 +1600,8 @@ def play_without_window(settings):
                 sys.stdout.write(text)
             except (OSError, ValueError):
                 pass
-        return process.wait()
+        status = process.wait() & 0xffffffff
+        return status if status < 0x80000000 else status - 0x100000000
 
 
 def version_tuple(text):

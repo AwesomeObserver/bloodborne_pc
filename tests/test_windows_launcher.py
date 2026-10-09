@@ -1,12 +1,13 @@
 """Windows launcher persistence and the actual Tk controls page."""
 from paths import ROOT
 import importlib.util
+import io
 import os
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 spec = importlib.util.spec_from_file_location('launcher_win', ROOT / 'launcher/bbport_launcher_win.py')
 launcher = importlib.util.module_from_spec(spec)
@@ -14,6 +15,34 @@ spec.loader.exec_module(launcher)
 
 
 class WindowsLauncherTests(unittest.TestCase):
+    def test_play_role_preserves_native_status_and_unicode_log(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings = {**launcher.APP_DEFAULTS, 'user_dir': directory}
+            for code in (7, 0xc0000005, 0xc0000409, 0xffffffff):
+                process = Mock(stdout=io.BytesIO('Crash dump: путь/краш.dmp\n'.encode('utf-8')))
+                process.wait.return_value = code
+                output = io.StringIO()
+                with patch.object(launcher, 'attach_stdio'), \
+                     patch.object(launcher.subprocess, 'Popen', return_value=process), \
+                     patch.object(launcher.sys, 'stdout', output):
+                    result = launcher.play_without_window(settings)
+                expected = code if code < 0x80000000 else code-0x100000000
+                self.assertEqual(result, expected)
+                self.assertIn('путь/краш.dmp', output.getvalue())
+                self.assertIn('путь/краш.dmp', (Path(directory)/'last_run.log').read_text(encoding='utf-8'))
+
+    def test_frozen_script_role_preserves_all_windows_status_bits(self):
+        for code in (0, 23, 0xc0000005, 0xc0000409, 0xc0000374, 0xffffffff, -1073741819, None, 'failed'):
+            for args in (['--run'], ['--script', 'fixture.py']):
+                with patch.object(launcher, 'attach_stdio'), \
+                     patch.object(launcher.sys, 'argv', ['entry']), \
+                     patch.object(launcher.runpy, 'run_path', side_effect=SystemExit(code)):
+                    result = launcher.run_role(args)
+                expected = (code & 0xffffffff) if isinstance(code, int) else (0 if code is None else 1)
+                if expected >= 0x80000000:
+                    expected -= 0x100000000
+                self.assertEqual(result, expected)
+
     def test_version_comparison(self):
         self.assertEqual(launcher.VERSION, (ROOT / 'VERSION.txt').read_text().strip())
         self.assertEqual(launcher.version_tuple('windows-v2'), launcher.version_tuple('2.0.0'))

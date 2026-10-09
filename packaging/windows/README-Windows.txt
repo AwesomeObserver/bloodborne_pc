@@ -109,6 +109,11 @@ logs\crashes\         Native minidumps under the port's data folder.
 
 Crash dumps stay on your computer. BB_CRASH_DUMP=0 disables them;
 BB_CRASH_DIR selects an existing output directory.
+If the game closes without a dump, run Trace Crash.cmd and reproduce it.
+The logs/crash-trace-*.zip report contains that session's output, dump and binary
+fingerprints. The external Windows debugger is enabled only for this diagnostic
+launch; exception processing can reduce performance. Normal launches retain the
+in-process reporter. Native exit status is logged in decimal and hexadecimal.
 Guest crash context adds up to 2 MiB of nearby code and object pages to the
 normal minidump. Collection runs only after a crash.
 Fatal GPU assertions also write a minidump before stopping with exit code 23.

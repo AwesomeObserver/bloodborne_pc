@@ -113,6 +113,9 @@ For a black screen, try **Advanced → Clear shader cache** and relaunch. For a 
 steps, the build version and **`user\last_run.log`** (or `last_run.log` in your selected
 save folder). Native crash dumps are saved locally in **`logs\crashes\`** under the
 port's data folder. **Advanced → Save session log** enables additional session logs.
+If the game closes without a dump, run **Trace Crash.cmd** and reproduce it in that
+launch. Send the resulting **logs/crash-trace-*.zip**. This optional diagnostic mode
+captures terminal Windows exceptions from a separate process and can reduce performance.
 
 ## Documentation
 

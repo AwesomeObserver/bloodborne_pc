@@ -645,6 +645,11 @@ int main(int argc, char **argv) {
         if (bbgpu_init(&gpu)) fail("GPU initialization failed");
         printf("GPU: window and Vulkan presenter ready; SDK 0x%08x, %u HLE symbols\n",(unsigned)sdk,bbgpu_symbol_count());
     }
+#ifdef _WIN32
+    /* DLL initialization may replace the process-wide filter. Install ours
+     * again after the graphics runtimes have loaded, before guest execution. */
+    SetUnhandledExceptionFilter(unhandled_fault);
+#endif
     unsigned char *traps = allocate(round_page((import_count + 1) * 32));
     unsigned char *data_traps = allocate((import_count + 1) * page_size);
     protect(data_traps, (import_count + 1) * page_size, 0);

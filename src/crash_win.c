@@ -20,6 +20,8 @@ static EXCEPTION_RECORD record;
 static CONTEXT context;
 static EXCEPTION_POINTERS pointers = {&record, &context};
 static DWORD fault_thread, dump_error;
+static HANDLE fault_process;
+static DWORD fault_pid;
 static volatile LONG dump_claimed;
 static char fatal_reason[256];
 static wchar_t dump_directory[1024];
@@ -47,7 +49,7 @@ void crash_win_set_guest(const void *base, size_t size) {
 
 static int read_memory(uintptr_t address, void *out, size_t size) {
     SIZE_T got = 0;
-    return ReadProcessMemory(GetCurrentProcess(), (const void *)address, out, size, &got) && got == size;
+    return ReadProcessMemory(fault_process, (const void *)address, out, size, &got) && got == size;
 }
 
 static void add_page(uintptr_t address, unsigned object) {
@@ -56,7 +58,7 @@ static void add_page(uintptr_t address, unsigned object) {
     address -= address % system_page;
     for (unsigned i=0; i<page_count; ++i) if (pages[i].address == address) return;
     MEMORY_BASIC_INFORMATION info;
-    if (!VirtualQuery((const void *)address, &info, sizeof(info)) || info.State != MEM_COMMIT ||
+    if (!VirtualQueryEx(fault_process, (const void *)address, &info, sizeof(info)) || info.State != MEM_COMMIT ||
             (info.Protect & (PAGE_NOACCESS | PAGE_GUARD))) return;
     const DWORD readable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
         PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
@@ -80,6 +82,18 @@ static void add_object(uintptr_t address) {
 }
 
 static void add_code(uintptr_t address) {
+    if (fault_process != GetCurrentProcess()) {
+        /* No guest registration exists in the observer. Capture readable private
+         * executable pages around PCs/callers, under the same 2 MiB budget. */
+        MEMORY_BASIC_INFORMATION info;
+        if (!VirtualQueryEx(fault_process, (const void *)address, &info, sizeof(info)) ||
+                info.Type != MEM_PRIVATE || !(info.Protect &
+                (PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY))) return;
+        uintptr_t first = address > 8192 ? address-8192 : 0;
+        first -= first % system_page;
+        for (unsigned i=0; i<5 && first<=UINTPTR_MAX-system_page; ++i, first+=system_page) add_page(first, 0);
+        return;
+    }
     if (!guest_base || address < guest_base || address-guest_base >= guest_size) return;
     uintptr_t first = address-guest_base > 8192 ? address-8192 : guest_base;
     uintptr_t last = guest_base+guest_size;
@@ -154,7 +168,7 @@ static DWORD WINAPI dump_worker(void *unused) {
     _snwprintf(path, sizeof(path)/sizeof(path[0]),
         L"%ls\\bb-crash-%04u%02u%02u-%02u%02u%02u-%lu.dmp", dump_directory,
         now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond,
-        GetCurrentProcessId());
+        fault_pid);
     WideCharToMultiByte(CP_UTF8, 0, path, -1, dump_path_utf8, sizeof(dump_path_utf8), NULL, NULL);
     HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
     if (file == INVALID_HANDLE_VALUE) {
@@ -171,13 +185,13 @@ static DWORD WINAPI dump_worker(void *unused) {
         MINIDUMP_USER_STREAM stream = {CommentStreamA, (ULONG)length+1, description};
         MINIDUMP_USER_STREAM_INFORMATION streams = {1, &stream};
         MINIDUMP_CALLBACK_INFORMATION callback = {dump_callback, NULL};
-        if (!write_dump(GetCurrentProcess(), GetCurrentProcessId(), file,
+        if (!write_dump(fault_process, fault_pid, file,
                 MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules | MiniDumpWithFullMemoryInfo,
                 &info, &streams, &callback)) {
             /* Optional context must not cost us the original minimal dump. */
             LARGE_INTEGER start = {.QuadPart=0};
             if (!SetFilePointerEx(file, start, NULL, FILE_BEGIN) || !SetEndOfFile(file) ||
-                    !write_dump(GetCurrentProcess(), GetCurrentProcessId(), file,
+                    !write_dump(fault_process, fault_pid, file,
                         MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules, &info, NULL, NULL)) {
                 dump_error = GetLastError();
             }
@@ -203,9 +217,12 @@ void crash_win_init(void) {
     printf("Runtime build: PE timestamp=%08lx, image_size=0x%lx\n",
         pe->FileHeader.TimeDateStamp, pe->OptionalHeader.SizeOfImage);
     wchar_t setting[8];
-    if (GetEnvironmentVariableW(L"BB_CRASH_DUMP", setting, 8) && setting[0] == L'0') return;
+    if (GetEnvironmentVariableW(L"BB_CRASH_DUMP", setting, 8) && setting[0] == L'0') {
+        puts("Crash reporting: disabled (BB_CRASH_DUMP=0)");
+        return;
+    }
     DWORD length = GetEnvironmentVariableW(L"BB_CRASH_DIR", dump_directory, 1024);
-    if (length >= 1024) return;
+    if (length >= 1024) { fputs("Crash reporting: BB_CRASH_DIR is too long\n", stderr); return; }
     if (!length) {
         CreateDirectoryW(L"logs", NULL);
         wcscpy(dump_directory, L"logs\\crashes");
@@ -213,12 +230,16 @@ void crash_win_init(void) {
     CreateDirectoryW(dump_directory, NULL);
     /* Preload before entering the guest/driver, avoiding LoadLibrary in a fault handler. */
     HMODULE dbghelp = LoadLibraryExW(L"dbghelp.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!dbghelp) return;
+    if (!dbghelp) {
+        fprintf(stderr, "Crash reporting: cannot load system DbgHelp (Windows error 0x%08lx)\n", GetLastError());
+        return;
+    }
     write_dump = (WriteDump)GetProcAddress(dbghelp, "MiniDumpWriteDump");
-    if (!write_dump) return;
+    if (!write_dump) { fputs("Crash reporting: MiniDumpWriteDump unavailable\n", stderr); return; }
     requested = CreateEventW(NULL, FALSE, FALSE, NULL);
     completed = CreateEventW(NULL, TRUE, FALSE, NULL);
     if (!requested || !completed) {
+        fprintf(stderr, "Crash reporting: event creation failed (Windows error 0x%08lx)\n", GetLastError());
         if (requested) CloseHandle(requested);
         if (completed) CloseHandle(completed);
         requested = completed = NULL;
@@ -226,15 +247,18 @@ void crash_win_init(void) {
     }
     HANDLE thread = CreateThread(NULL, 0, dump_worker, NULL, 0, NULL);
     if (!thread) {
+        fprintf(stderr, "Crash reporting: writer thread creation failed (Windows error 0x%08lx)\n", GetLastError());
         CloseHandle(requested);
         CloseHandle(completed);
         requested = completed = NULL;
         return;
     }
     CloseHandle(thread);
+    puts("Crash reporting: dedicated dump writer ready");
 }
 
-static void submit_dump(EXCEPTION_POINTERS *exception, const char *reason) {
+static void submit_dump(EXCEPTION_POINTERS *exception, const char *reason,
+        HANDLE process, DWORD pid, DWORD tid) {
     if (!requested || !completed) return;
     /* First failure owns the snapshot. Other fatal threads wait for the same
      * completed file instead of overwriting context or terminating mid-write. */
@@ -242,7 +266,9 @@ static void submit_dump(EXCEPTION_POINTERS *exception, const char *reason) {
         record = *exception->ExceptionRecord;
         context = *exception->ContextRecord;
         snprintf(fatal_reason, sizeof(fatal_reason), "%s", reason);
-        fault_thread = GetCurrentThreadId();
+        fault_process = process;
+        fault_pid = pid;
+        fault_thread = tid;
         SetEvent(requested);
     }
     if (WaitForSingleObject(completed, 10000) != WAIT_OBJECT_0) {
@@ -255,7 +281,11 @@ static void submit_dump(EXCEPTION_POINTERS *exception, const char *reason) {
 }
 
 void crash_win_dump(EXCEPTION_POINTERS *exception) {
-    submit_dump(exception, "Windows exception");
+    submit_dump(exception, "Windows exception", GetCurrentProcess(), GetCurrentProcessId(), GetCurrentThreadId());
+}
+
+void crash_win_dump_external(HANDLE process, DWORD pid, DWORD tid, EXCEPTION_POINTERS *exception) {
+    submit_dump(exception, "External crash monitor: unhandled Windows exception", process, pid, tid);
 }
 
 __attribute__((noinline)) void crash_win_dump_fatal(const char *reason) {
@@ -267,6 +297,6 @@ __attribute__((noinline)) void crash_win_dump_fatal(const char *reason) {
     fatal.ExceptionFlags = EXCEPTION_NONCONTINUABLE;
     fatal.ExceptionAddress = (void *)(uintptr_t)current.Rip;
     EXCEPTION_POINTERS exception = {&fatal, &current};
-    submit_dump(&exception, reason ? reason : "Fatal stop");
+    submit_dump(&exception, reason ? reason : "Fatal stop", GetCurrentProcess(), GetCurrentProcessId(), GetCurrentThreadId());
 }
 #endif
