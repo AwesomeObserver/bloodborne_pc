@@ -261,8 +261,8 @@ static void StartProfileWriter() {
 }
 #endif
 
-extern "C" void bbgpu_collect_cache(void) {
-    Storage::DataBase::Instance().CollectForExit();
+extern "C" void bbgpu_flush_pipeline_cache(void) {
+    Storage::DataBase::Instance().Close();
 }
 
 extern "C" int bbgpu_init(const BbGpuConfig* config) {
@@ -293,8 +293,8 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
             SDL_WaitEventTimeout(nullptr, 8);
         }
         LOG_INFO(Frontend, "Window closed by user");
-        // `_Exit` skips Rasterizer's destructor, which is what normally publishes the cache.
-        Storage::DataBase::Instance().CollectForExit();
+        // `_Exit` skips Rasterizer's destructor, which finishes pending user-cache writes.
+        Storage::DataBase::Instance().Close();
         std::fflush(stdout);
         std::_Exit(0);
     });

@@ -460,8 +460,8 @@ void runtime_restart(void) {
     }
     CloseHandle(process.hThread); CloseHandle(process.hProcess);
     /* The new launch waits for this process's GPU device to go away (run.py --after).
-     * TerminateProcess skips destructors, so publish the shader cache first. */
-    bbgpu_collect_cache();
+     * TerminateProcess skips destructors, so finish pending user-cache writes first. */
+    bbgpu_flush_pipeline_cache();
     TerminateProcess(GetCurrentProcess(),0);
 #else
     puts("Runtime: restarting through run.sh");

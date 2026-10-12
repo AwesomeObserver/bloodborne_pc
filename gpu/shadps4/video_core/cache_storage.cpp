@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include <cstdio>
 #include "common/elf_info.h"
 #include "common/logging/log.h"
 #include "common/io_file.h"
@@ -20,7 +19,6 @@
 #include <exception>
 #include <mutex>
 #include <queue>
-#include <unordered_set>
 
 namespace {
 
@@ -78,12 +76,11 @@ constexpr std::string GetBlobFileExtension(BlobType type) {
     }
 }
 
-void DataBase::Open(std::string_view family_name) {
+void DataBase::Open() {
     if (opened) {
         return;
     }
 
-    family = std::string{family_name};
     const auto& game_info = Common::ElfInfo::Instance();
 
     using namespace Common::FS;
@@ -106,108 +103,10 @@ void DataBase::Open(std::string_view family_name) {
         if (!std::filesystem::exists(cache_path)) {
             std::filesystem::create_directories(cache_path);
         }
-        if (!family.empty()) {
-            const auto serial = std::filesystem::path{game_info.GameSerial()};
-            auto candidate = GetProcessDirectory() / "cache_bundled" / family / serial;
-            if (!std::filesystem::is_directory(candidate)) {
-                candidate =
-                    GetUserPath(PathType::UserDir) / "cache_bundled" / family / serial;
-            }
-            if (std::filesystem::is_directory(candidate)) {
-                bundled_path = candidate;
-                LOG_INFO(Render, "Bundled shader cache: {}", bundled_path.string());
-                std::printf("Bundled shader cache: %s\n", bundled_path.string().c_str());
-            }
-        }
     }
 
     io_worker = std::jthread{ProcessIO};
     opened = true;
-}
-
-/// Shader blobs only. `vk_pipeline_cache.bin` shares the .bin suffix and is the driver's own
-/// cache: it must not be shipped.
-static bool IsBundledShaderBlob(const std::filesystem::path& path) {
-    if (path.filename() == "vk_pipeline_cache.bin") {
-        return false;
-    }
-    const auto ext = path.extension().string();
-    return ext == ".spv" || ext == ".meta" || ext == ".key" || ext == ".bin";
-}
-
-/// Adds blobs that the destination does not already have. An existing file stays, so a later
-/// session only contributes pipelines it saw for the first time.
-static u64 MergeNewShaderBlobs(const std::filesystem::path& src, const std::filesystem::path& dest) {
-    std::error_code ec;
-    std::filesystem::create_directories(dest, ec);
-    if (ec) {
-        return 0;
-    }
-    u64 copied = 0;
-    for (const auto& entry : std::filesystem::directory_iterator(src, ec)) {
-        ec.clear();
-        if (!entry.is_regular_file(ec) || !IsBundledShaderBlob(entry.path())) {
-            continue;
-        }
-        const auto out = dest / entry.path().filename();
-        if (std::filesystem::exists(out)) {
-            continue;
-        }
-        std::filesystem::copy_file(entry.path(), out, ec);
-        if (!ec) {
-            ++copied;
-        }
-    }
-    return copied;
-}
-
-static void PublishCollectedCache(const std::filesystem::path& cache_path, const std::string& family) {
-    if (!EmulatorSettingsImpl::Flag("BB_CACHE_COLLECT", true) || family.empty() ||
-        !std::filesystem::exists(cache_path)) {
-        return;
-    }
-    using namespace Common::FS;
-    const auto serial = cache_path.filename();
-    const auto collect = GetUserPath(PathType::UserDir) / "cache_collect" / family / serial;
-    std::error_code ec;
-    std::filesystem::create_directories(collect, ec);
-    ec.clear();
-    u64 copied = 0;
-    for (const auto& entry : std::filesystem::directory_iterator(cache_path, ec)) {
-        ec.clear();
-        if (!entry.is_regular_file(ec)) {
-            continue;
-        }
-        const auto name = entry.path().filename();
-        if (name.extension() == ".tmp") {
-            continue;
-        }
-        std::filesystem::copy_file(entry.path(), collect / name,
-                                   std::filesystem::copy_options::overwrite_existing, ec);
-        if (!ec) {
-            ++copied;
-        }
-    }
-    const auto bundled_name = std::filesystem::path{"cache_bundled"} / family / serial;
-    const u64 into_exe = MergeNewShaderBlobs(cache_path, GetProcessDirectory() / bundled_name);
-    const u64 into_user =
-        MergeNewShaderBlobs(cache_path, GetUserPath(PathType::UserDir) / bundled_name);
-    LOG_INFO(Render,
-             "Collected shader cache ({} files) to {}; bundled {} next to the exe, {} in the user dir",
-             copied, collect.string(), into_exe, into_user);
-    std::printf("Collected shader cache (%llu files) to %s; bundled %llu new next to the exe, "
-                "%llu in the user dir\n",
-                static_cast<unsigned long long>(copied), collect.string().c_str(),
-                static_cast<unsigned long long>(into_exe),
-                static_cast<unsigned long long>(into_user));
-    std::fflush(stdout);
-}
-
-void DataBase::CollectForExit() {
-    if (!IsOpened() || EmulatorSettings.IsPipelineCacheArchived()) {
-        return;
-    }
-    PublishCollectedCache(cache_path, family);
 }
 
 void DataBase::Close() {
@@ -221,8 +120,6 @@ void DataBase::Close() {
     if (EmulatorSettings.IsPipelineCacheArchived()) {
         mz_zip_writer_finalize_archive(&zip_ar);
         mz_zip_writer_end(&zip_ar);
-    } else {
-        PublishCollectedCache(cache_path, family);
     }
 
     opened = false;
@@ -323,10 +220,6 @@ void DataBase::Load(BlobType type, const std::string& name, std::vector<u8>& dat
     auto path = EmulatorSettings.IsPipelineCacheArchived() ? std::filesystem::path{name}
                                                            : cache_path / name;
     LoadVector(type, path, data);
-    if (data.empty() && !bundled_path.empty() && !EmulatorSettings.IsPipelineCacheArchived()) {
-        auto bundled = bundled_path / name;
-        LoadVector(type, bundled, data);
-    }
 }
 
 void DataBase::Load(BlobType type, const std::string& name, std::vector<u32>& data) {
@@ -337,10 +230,6 @@ void DataBase::Load(BlobType type, const std::string& name, std::vector<u32>& da
     auto path = EmulatorSettings.IsPipelineCacheArchived() ? std::filesystem::path{name}
                                                            : cache_path / name;
     LoadVector(type, path, data);
-    if (data.empty() && !bundled_path.empty() && !EmulatorSettings.IsPipelineCacheArchived()) {
-        auto bundled = bundled_path / name;
-        LoadVector(type, bundled, data);
-    }
 }
 
 void DataBase::ForEachBlob(BlobType type, const std::function<void(std::vector<u8>&& data)>& func) {
@@ -360,17 +249,9 @@ void DataBase::ForEachBlob(BlobType type, const std::function<void(std::vector<u
             }
         }
     } else {
-        std::unordered_set<std::string> seen;
-        const auto visit = [&](const std::filesystem::path& dir) {
-            if (dir.empty() || !std::filesystem::exists(dir)) {
-                return;
-            }
-            for (const auto& file_name : std::filesystem::directory_iterator{dir}) {
+        if (std::filesystem::exists(cache_path)) {
+            for (const auto& file_name : std::filesystem::directory_iterator{cache_path}) {
                 if (!file_name.path().extension().string().ends_with(ext)) {
-                    continue;
-                }
-                const auto name = file_name.path().filename().string();
-                if (!seen.insert(name).second) {
                     continue;
                 }
                 using namespace Common::FS;
@@ -381,9 +262,7 @@ void DataBase::ForEachBlob(BlobType type, const std::function<void(std::vector<u
                     func(std::move(data));
                 }
             }
-        };
-        visit(cache_path);
-        visit(bundled_path);
+        }
     }
 }
 

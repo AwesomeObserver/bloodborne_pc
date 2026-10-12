@@ -19,7 +19,7 @@ CompileQueue::CompileQueue() {
     } else {
         // Driver pipeline creation is single-threaded per call (~10 ms each on AMD): bursts
         // of a new area finish in proportion to the number of workers.
-        count = std::clamp<u32>(BbThreads::Available() / 3, 2, 6);
+        count = std::clamp<u32>(BbThreads::Available() / 2, 2, 8);
     }
     threads.reserve(count);
     for (u32 i = 0; i < count; ++i) {
@@ -64,30 +64,30 @@ std::shared_future<void> CompileQueue::Enqueue(u64 key, std::function<void()> fn
 }
 
 void CompileQueue::Wait(u64 key) {
-    std::vector<std::shared_future<void>> wait;
-    Item stolen{};
+    // Never run compile work on the caller: the GPU command thread waits here during draws.
+    // Inline pipeline creation beside the recording threads has caused device lost.
+    // The job the draw needs is moved to the front, so it does not sit behind the rest of a
+    // new area's burst.
+    std::shared_future<void> future;
     {
         std::scoped_lock lock{mutex};
-        auto it = pending.find(key);
-        if (it == pending.end()) {
+        const auto it = pending.find(key);
+        if (it == pending.end() || it->second.empty()) {
             return;
         }
-        wait = it->second;
+        future = it->second.back();
         const auto queued = std::ranges::find_if(queue, [key](const Item& item) {
             return item.key == key && item.task.valid();
         });
-        if (queued != queue.end()) {
-            stolen.key = key;
-            stolen.task = std::move(queued->task);
+        if (queued != queue.end() && queued != queue.begin()) {
+            Item item = std::move(*queued);
+            queue.erase(queued);
+            queue.push_front(std::move(item));
         }
     }
-    if (stolen.task.valid()) {
-        Run(stolen);
-    }
-    for (auto& future : wait) {
-        if (future.valid()) {
-            future.wait();
-        }
+    cv.notify_one();
+    if (future.valid()) {
+        future.wait();
     }
 }
 

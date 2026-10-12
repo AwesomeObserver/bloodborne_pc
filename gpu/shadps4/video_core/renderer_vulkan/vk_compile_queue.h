@@ -31,8 +31,8 @@ public:
     /// Returns a future that completes when the (possibly earlier) job for `key` finishes.
     std::shared_future<void> Request(u64 key, std::function<void()> fn);
 
-    /// Wait until every job currently associated with `key` has finished. A job that no worker
-    /// has started yet runs on the calling thread instead of waiting for its turn.
+    /// Wait until every job currently associated with `key` has finished. A job still queued
+    /// is moved to the front. The caller never runs it: the GPU thread waits here during draws.
     void Wait(u64 key);
 
     /// Wait up to `timeout` for jobs of `key`. False if any job is still running.

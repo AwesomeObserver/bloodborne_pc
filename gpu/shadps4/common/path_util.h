@@ -85,9 +85,6 @@ constexpr auto LOG_FILE = "shad_log.txt";
  *
  * @returns The filesystem path associated with the PathType enum.
  */
-/// Directory that contains the running executable (for packaged `cache_bundled`).
-[[nodiscard]] std::filesystem::path GetProcessDirectory();
-
 [[nodiscard]] const std::filesystem::path& GetUserPath(PathType user_path);
 
 /**

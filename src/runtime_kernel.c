@@ -185,7 +185,7 @@ static ABI int32_t yield(void) { sched_yield(); return 0; }
 static ABI __attribute__((noreturn)) void hard_exit(int status) {
     printf("Runtime: guest requested _exit(%d)\n",status);
     runtime_report();
-    bbgpu_collect_cache();
+    bbgpu_flush_pipeline_cache();
     fflush(stdout);
     _exit(status);
 }

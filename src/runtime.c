@@ -196,7 +196,7 @@ static ABI __attribute__((noreturn)) void guest_libc_exit(int status) {
     printf("Runtime: guest requested exit(%d)\n", status);
     runtime_finalize(NULL);
     runtime_report();
-    bbgpu_collect_cache();
+    bbgpu_flush_pipeline_cache();
     exit(status);
 }
 uintptr_t runtime_resolve(const char *name, int is_data) {

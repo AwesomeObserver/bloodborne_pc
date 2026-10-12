@@ -23,7 +23,6 @@
 #else
 // This is the maximum number of UTF-8 code units permissible in all other OSes' file paths
 #define MAX_PATH 1024
-#include <unistd.h>
 #endif
 #endif
 
@@ -178,25 +177,6 @@ bool ValidatePath(const fs::path& path) {
 std::string PathToUTF8String(const std::filesystem::path& path) {
     const auto u8_string = path.u8string();
     return std::string{u8_string.begin(), u8_string.end()};
-}
-
-std::filesystem::path GetProcessDirectory() {
-#ifdef _WIN32
-    wchar_t buf[MAX_PATH]{};
-    const DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) {
-        return std::filesystem::current_path();
-    }
-    return std::filesystem::path{buf}.parent_path();
-#else
-    char buf[MAX_PATH]{};
-    const ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
-    if (n <= 0) {
-        return std::filesystem::current_path();
-    }
-    buf[n] = '\0';
-    return std::filesystem::path{buf}.parent_path();
-#endif
 }
 
 const fs::path& GetUserPath(PathType shad_path) {

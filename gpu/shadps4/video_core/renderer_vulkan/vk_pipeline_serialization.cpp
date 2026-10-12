@@ -24,9 +24,9 @@
 
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
-static constexpr u32 ShaderBinaryVersion = 13u; // descriptor sets plus Remix transform feedback
-static constexpr u32 ShaderMetaVersion = 12u;   // descriptor sets plus Remix image metadata
-static constexpr u32 PipelineKeyVersion = 11u;  // descriptor sets plus Remix runtime layout
+static constexpr u32 ShaderBinaryVersion = 14u; // permutation index must match program_cache slot
+static constexpr u32 ShaderMetaVersion = 13u;   // permutation index must match program_cache slot
+static constexpr u32 PipelineKeyVersion = 12u;  // permutation index must match program_cache slot
 } // namespace Serialization
 
 namespace Vulkan {
@@ -291,6 +291,10 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage,
             if (it != found.value()->modules.end()) {
                 const auto idx = std::distance(found.value()->modules.begin(), it);
                 if (perm_idx != idx) {
+                    // The same specialization was stored under two indices (a hole from loading a
+                    // higher index first, or two saves that now compare equal). The module already
+                    // in the program is the one later lookups will find. Skip this pipeline only;
+                    // erasing the program would drop every other pipeline that shares the shader.
                     LOG_WARNING(Render_Vulkan,
                                 "Cached permutation {} of {}_{:x} conflicts with index {}, skipping "
                                 "preload",
@@ -336,23 +340,7 @@ void PipelineCache::WarmUp() {
         return;
     }
 
-    std::string family = "other";
-    switch (instance.GetDriverID()) {
-    case vk::DriverId::eAmdProprietary:
-        family = "amd-proprietary";
-        break;
-    case vk::DriverId::eNvidiaProprietary:
-        family = "nvidia-proprietary";
-        break;
-    case vk::DriverId::eMesaRadv:
-    case vk::DriverId::eAmdOpenSource:
-        family = "amd-radv";
-        break;
-    default:
-        break;
-    }
-    family += fmt::format("-{:016x}", XXH3_64bits(&profile, sizeof(profile)));
-    Storage::DataBase::Instance().Open(family);
+    Storage::DataBase::Instance().Open();
 
     // The profile blob also stamps the serialization versions: a cache written by another
     // build is removed as a whole instead of piling up entries no build can load.
@@ -385,54 +373,8 @@ void PipelineCache::WarmUp() {
                                            std::move(profile_data));
     }
 
-    std::vector<std::vector<u8>> blobs;
-    Storage::DataBase::Instance().ForEachBlob(
-        Storage::BlobType::PipelineKey, [&](std::vector<u8>&& data) { blobs.push_back(std::move(data)); });
-
-    std::atomic<u32> num_pipelines{0};
-    std::atomic<u32> stale_version{0};
-    std::atomic<u32> stale_load{0};
-    std::atomic<u32> num_damaged{0};
-    const u32 num_total_pipelines = static_cast<u32>(blobs.size());
-
-    for (u32 i = 0; i < num_total_pipelines; ++i) {
-        compile_queue.Request(0x5757000000000000ull + i,
-                              [this, data = std::move(blobs[i]), &num_pipelines, &stale_version,
-                               &stale_load, &num_damaged]() mutable {
-                                  try {
-                                      Serialization::Archive ar{std::move(data)};
-                                      Serialization::Reader pldata{ar};
-
-                                      u32 version{};
-                                      pldata.Read(version);
-                                      if (version != Serialization::PipelineKeyVersion) {
-                                          ++stale_version;
-                                          return;
-                                      }
-
-                                      u32 is_compute{};
-                                      pldata.Read(is_compute);
-                                      const bool result = is_compute ? LoadComputePipeline(ar)
-                                                                     : LoadGraphicsPipeline(ar);
-                                      if (result) {
-                                          ++num_pipelines;
-                                      } else {
-                                          ++stale_load;
-                                      }
-                                  } catch (const std::exception& e) {
-                                      if (num_damaged++ == 0) {
-                                          LOG_WARNING(Render, "Pipeline cache: damaged entry ({})",
-                                                      e.what());
-                                      }
-                                  }
-                              });
-    }
-    compile_queue.WaitIdle();
-
-    if (num_damaged.load()) {
-        // Nothing preloaded is trusted: modules of a damaged entry may sit in programs that later
-        // lookups would reuse. Start as with no cache and write a fresh one.
-        LOG_WARNING(Render, "Pipeline cache: {} damaged entries, rebuilding it", num_damaged.load());
+    const auto rebuild_cache = [&] {
+        LOG_WARNING(Render, "Pipeline cache is too stale or damaged: rebuilding it");
         {
             std::unique_lock pipelines_lk{pipelines_mutex};
             std::unique_lock programs_lk{programs_mutex};
@@ -460,16 +402,70 @@ void PipelineCache::WarmUp() {
         std::memcpy(profile_data.data(), &stamp, sizeof(stamp));
         Storage::DataBase::Instance().Save(Storage::BlobType::ShaderProfile, "profile",
                                            std::move(profile_data));
+    };
+
+    std::vector<std::vector<u8>> blobs;
+    Storage::DataBase::Instance().ForEachBlob(
+        Storage::BlobType::PipelineKey, [&](std::vector<u8>&& data) { blobs.push_back(std::move(data)); });
+
+    u32 num_pipelines = 0;
+    u32 stale_version = 0;
+    u32 stale_load = 0;
+    u32 num_damaged = 0;
+    const u32 num_total_pipelines = static_cast<u32>(blobs.size());
+
+    // Preload on this thread only: parallel VkPipeline creation during WarmUp has hung some
+    // drivers when combined with a partially migrated cache.
+    const auto load_blob = [this, &num_pipelines, &stale_version, &stale_load,
+                            &num_damaged](std::vector<u8> data) {
+        try {
+            Serialization::Archive ar{std::move(data)};
+            Serialization::Reader pldata{ar};
+
+            u32 version{};
+            pldata.Read(version);
+            if (version != Serialization::PipelineKeyVersion) {
+                ++stale_version;
+                return;
+            }
+
+            u32 is_compute{};
+            pldata.Read(is_compute);
+            const bool result =
+                is_compute ? LoadComputePipeline(ar) : LoadGraphicsPipeline(ar);
+            if (result) {
+                ++num_pipelines;
+            } else {
+                ++stale_load;
+            }
+        } catch (const std::exception& e) {
+            if (num_damaged++ == 0) {
+                LOG_WARNING(Render, "Pipeline cache: damaged entry ({})", e.what());
+            }
+        }
+    };
+    for (auto& data : blobs) {
+        load_blob(std::move(data));
+    }
+
+    const u32 loaded = num_pipelines;
+    // A few entries that fail to preload are skipped. The ones that loaded stay: wiping the
+    // directory made the next session recompile every area from scratch.
+    if (num_damaged || (num_total_pipelines > 0 && loaded == 0)) {
+        if (num_damaged) {
+            LOG_WARNING(Render, "Pipeline cache: {} damaged entries", num_damaged);
+        } else {
+            LOG_WARNING(Render, "Pipeline cache: only {} of {} entries loaded ({} stale version, "
+                                "{} load failed)",
+                        loaded, num_total_pipelines, stale_version, stale_load);
+        }
+        rebuild_cache();
         return;
     }
 
-    LOG_INFO(Render, "Preloaded {} pipelines", num_pipelines.load());
-    std::printf("Pipeline cache: preloaded %u of %u; stale version %u, load failed %u\n",
-                num_pipelines.load(), num_total_pipelines, stale_version.load(), stale_load.load());
-    if (num_total_pipelines > num_pipelines.load()) {
-        LOG_WARNING(Render, "{} stale pipelines were found. Consider re-generating the cache",
-                    num_total_pipelines - num_pipelines.load());
-    }
+    LOG_INFO(Render, "Preloaded {} pipelines", loaded);
+    std::printf("Pipeline cache: preloaded %u of %u; stale version %u, load failed %u\n", loaded,
+                num_total_pipelines, stale_version, stale_load);
 
     Storage::DataBase::Instance().FinishPreload();
 }

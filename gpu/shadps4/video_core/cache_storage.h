@@ -26,12 +26,8 @@ public:
         return *Common::Singleton<DataBase>::Instance();
     }
 
-    /// `family` selects the read-only bundled overlay (`cache_bundled/<family>/<serial>`).
-    void Open(std::string_view family = {});
+    void Open();
     void Close();
-    /// Copies the on-disk blobs into `cache_collect` and `cache_bundled` without stopping the
-    /// writer. The window thread calls this before `_Exit`, which skips `Close()`.
-    void CollectForExit();
     [[nodiscard]] bool IsOpened() const {
         return opened;
     }
@@ -50,8 +46,6 @@ public:
 private:
     std::jthread io_worker{};
     std::filesystem::path cache_path{};
-    std::filesystem::path bundled_path{};
-    std::string family{};
     bool opened{};
 };
 
