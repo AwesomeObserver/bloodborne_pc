@@ -16,8 +16,11 @@
 #include "test_assert.h"
 
 int main(int argc, char **argv) {
-    const bool with_window = argc > 1 && std::strcmp(argv[1], "window") == 0;
-    const bool dlss = argc > 1 && std::strcmp(argv[1], "dlss") == 0;
+    bool with_window = false, dlss = false;
+    for (int i = 1; i < argc; ++i) {
+        with_window |= std::strcmp(argv[i], "window") == 0;
+        dlss |= std::strcmp(argv[i], "dlss") == 0;
+    }
     std::unique_ptr<Frontend::WindowSDL> window;
     if (with_window) {
         SDL_setenv_unsafe("BB_HIDDEN_WINDOW", "1", 1);
@@ -166,8 +169,12 @@ int main(int argc, char **argv) {
                 const bool bar = int(x) >= left && int(x) < left + 60 && y >= 80 && y < 240;
                 const u8 value = bar ? 230 : 35;
                 const u32 p = (y * W + x) * 4;
-                for (u32 c = 0; c < 3; ++c)
-                    bytes[p + c] = bytes[N * 4 + p + c] = value;
+                // Cover both an unchanged scene and the three-level shift seen in the
+                // game's display conversion. Neither may produce an opaque scene mask.
+                for (u32 c = 0; c < 3; ++c) {
+                    bytes[p + c] = value;
+                    bytes[N * 4 + p + c] = value - (f < 10 ? 0 : 3);
+                }
                 bytes[p + 3] = bytes[N * 4 + p + 3] = 255;
                 if (x < 70 && y < 30) {
                     bytes[p] = with_window ? 0 : 255;
@@ -237,9 +244,18 @@ int main(int argc, char **argv) {
             .imageExtent = {W, H, 1}};
         cmd.copyImageToBuffer(output->generated.resource.image, vk::ImageLayout::eGeneral, staging,
                               readback, d);
+        const vk::BufferImageCopy ui_readback{
+            .imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+            .imageExtent = {W, H, 1}};
+        cmd.copyImageToBuffer(output->ui.resource.image, vk::ImageLayout::eGeneral, staging,
+                              ui_readback, d);
         scheduler.Finish();
         const auto *result = bytes + N * 12;
         if (generated) {
+            const auto *ui = reinterpret_cast<const u16 *>(bytes);
+            assert(ui[(10 * W + 10) * 4 + 3] == 0x3c00); // Exact opaque HUD alpha.
+            assert(ui[(150 * W + left + 30) * 4 + 3] == 0); // Moving scene.
+            assert(ui[(300 * W + 300) * 4 + 3] == 0); // Static scene.
             assert(result[(10 * W + 10) * 4] == 255 && result[(10 * W + 10) * 4 + 1] == 255 &&
                    result[(10 * W + 10) * 4 + 2] == 0);
             double center = 0;

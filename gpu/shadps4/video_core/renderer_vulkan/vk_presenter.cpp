@@ -526,8 +526,10 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
              .image = source.image,
              .viewType = vk::ImageViewType::e2D,
              .format = snapshot_format,
-             .components = {vk::ComponentSwizzle::eIdentity, vk::ComponentSwizzle::eIdentity,
-                            vk::ComponentSwizzle::eIdentity, vk::ComponentSwizzle::eOne},
+             // Bloodborne's display-copy shader exports the UI target as .bgra.
+             // Apply that same swizzle to the pre-HUD snapshot before comparing it.
+             .components = {vk::ComponentSwizzle::eB, vk::ComponentSwizzle::eG,
+                            vk::ComponentSwizzle::eR, vk::ComponentSwizzle::eOne},
              .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}}));
         draw_scheduler.DeferOperation(
             [device, snapshot_view] { device.destroyImageView(snapshot_view); });
