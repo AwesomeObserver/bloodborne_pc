@@ -121,8 +121,9 @@ vk::CommandBuffer BeginCommandBuffer(CommandPool& pool) {
 
 } // namespace
 
-Scheduler::Scheduler(const Instance& instance, bool threaded_recording)
-    : instance{instance}, work_semaphore{instance}, command_pool{instance, &work_semaphore} {
+Scheduler::Scheduler(const Instance& instance, bool threaded_recording, vk::Queue queue)
+    : instance{instance}, submit_queue{queue ? queue : instance.GetGraphicsQueue()},
+      work_semaphore{instance}, command_pool{instance, &work_semaphore} {
     crumb_stream = Breadcrumbs::NewStream(
         instance, threaded_recording ? "draws: game and presenter" : "presentation");
     // bbport: BB_VK_RECORD_THREAD=0 records on the calling thread.
@@ -934,7 +935,7 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
         operation();
     }
     ImGui::Core::TextureManager::Submit();
-    auto submit_result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
+    auto submit_result = submit_queue.submit(submit_info, info.fence);
     if (submit_result == vk::Result::eErrorDeviceLost) {
         Breadcrumbs::ReportDeviceLost("submit");
     }
@@ -1013,7 +1014,7 @@ void Scheduler::SubmitAsync(SubmitInfo& info) {
             for (auto& operation : info.before_submit) {
                 operation();
             }
-            const auto result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
+            const auto result = submit_queue.submit(submit_info, info.fence);
             if (result == vk::Result::eErrorDeviceLost) {
                 Breadcrumbs::ReportDeviceLost("submit");
             }

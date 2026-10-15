@@ -730,7 +730,8 @@ private:
 class Scheduler {
 public:
     /// `threaded_recording`: Vulkan commands passed to Record() are recorded by a worker thread.
-    explicit Scheduler(const Instance& instance, bool threaded_recording = false);
+    explicit Scheduler(const Instance& instance, bool threaded_recording = false,
+                       vk::Queue submit_queue = {});
     ~Scheduler();
 
     /// Sends the current execution context to the GPU
@@ -1121,6 +1122,7 @@ private:
 
 private:
     const Instance& instance;
+    vk::Queue submit_queue;
     u32 crumb_stream = 0; ///< bbport: GPU breadcrumbs (vk_breadcrumbs.h)
     Semaphore work_semaphore;
     CommandPool command_pool;

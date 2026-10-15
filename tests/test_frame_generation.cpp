@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Real GPU interpolation, HUD composition, copied guides and history reset.
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <limits>
 #include <SDL3/SDL.h>
 #include "sdl_window.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
@@ -21,9 +24,13 @@ int main(int argc, char **argv) {
         with_window |= std::strcmp(argv[i], "window") == 0;
         dlss |= std::strcmp(argv[i], "dlss") == 0;
     }
+    const char* pacing_env = std::getenv("BB_TEST_PRESENT_SECONDS");
+    const int pacing_seconds = pacing_env ? std::clamp(std::atoi(pacing_env), 0, 60) : 0;
+    with_window |= pacing_seconds > 0;
+    const auto present_interval = std::chrono::nanoseconds(8'333'333);
     std::unique_ptr<Frontend::WindowSDL> window;
     if (with_window) {
-        SDL_setenv_unsafe("BB_HIDDEN_WINDOW", "1", 1);
+        SDL_setenv_unsafe("BB_HIDDEN_WINDOW", pacing_seconds ? "0" : "1", 1);
         SDL_setenv_unsafe("BB_FULLSCREEN", "0", 1);
         window = std::make_unique<Frontend::WindowSDL>(640, 360, "Frame generation test");
     }
@@ -31,6 +38,10 @@ int main(int argc, char **argv) {
     auto instance_owner = window ? std::make_unique<Vulkan::Instance>(*window, 0, validation)
                                  : std::make_unique<Vulkan::Instance>(0, validation);
     auto &instance = *instance_owner;
+    const bool shared_queue = instance.GetPresentQueue() == instance.GetGraphicsQueue();
+    if (const char *env = std::getenv("BB_PRESENT_QUEUE"); env && env[0] == '0')
+        assert(shared_queue);
+    std::printf("Presentation queue: %s\n", shared_queue ? "shared" : "separate");
     static vk::detail::DynamicLoader loader;
     vk::detail::DispatchLoaderDynamic d;
     d.init(loader.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr"));
@@ -38,6 +49,7 @@ int main(int argc, char **argv) {
     d.init(instance.GetDevice());
     const auto device = instance.GetDevice();
     Vulkan::Scheduler scheduler(instance, true);
+    Vulkan::Scheduler presentation(instance, false, instance.GetPresentQueue());
     std::unique_ptr<Vulkan::Swapchain> swapchain;
     if (window)
         swapchain = std::make_unique<Vulkan::Swapchain>(instance, *window);
@@ -81,12 +93,13 @@ int main(int argc, char **argv) {
         cmd.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &b}, d);
     };
     unsigned presents = 0;
-    const auto present = [&](const Vulkan::Dlss::Resource &image) {
+    const auto present = [&](const Vulkan::Dlss::Resource &image, bool paced = true) {
         if (!swapchain)
             return;
         window->PollEvents();
         assert(swapchain->AcquireNextImage());
-        auto cmd = scheduler.CommandBuffer();
+        assert(device.resetFences(*output->present_done) == vk::Result::eSuccess);
+        auto cmd = presentation.CommandBuffer();
         const std::array transitions{
             vk::ImageMemoryBarrier2{
                 .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
@@ -133,16 +146,21 @@ int main(int argc, char **argv) {
         cmd.pipelineBarrier2({.imageMemoryBarrierCount = 2, .pImageMemoryBarriers = done.data()},
                              d);
         Vulkan::SubmitInfo submit{};
+        submit.AddWait(scheduler.GetWorkSemaphore()->Handle(), scheduler.CurrentTick() - 1);
         submit.AddWait(swapchain->GetImageAcquiredSemaphore());
         submit.AddSignal(swapchain->GetPresentReadySemaphore());
-        const u64 tick = scheduler.CurrentTick();
-        scheduler.Flush(submit);
-        scheduler.WaitSubmitted(tick);
+        submit.AddSignal(*output->present_done);
+        presentation.Flush(submit);
+        swapchain->WaitForPresentSlot(paced ? present_interval : std::chrono::nanoseconds{},
+                                      *output->present_done);
         {
             std::scoped_lock lock{Vulkan::Scheduler::submit_mutex};
             swapchain->Present();
         }
-        scheduler.Finish();
+        if (!paced)
+            assert(device.waitForFences(*output->present_done, true,
+                                        std::numeric_limits<u64>::max()) == vk::Result::eSuccess);
+        presentation.Finish();
         ++presents;
     };
     BbFrameCamera camera{};
@@ -283,6 +301,7 @@ int main(int argc, char **argv) {
     settings.frame_generation = BbSettings::FrameGenerationOff;
     generation.Invalidate();
     assert(!generation.Record(scheduler.CommandBuffer(), color.resource, pool.front(), output));
+    present(color.resource, false); // Ordinary presentation must still work with FG disabled.
     settings.frame_generation =
         dlss ? BbSettings::FrameGenerationDlss : BbSettings::FrameGenerationFsr;
     for (u32 width : {800u, W}) {
@@ -323,8 +342,18 @@ int main(int argc, char **argv) {
     std::printf("PASS: %u intermediate frames, exact HUD pixels, explicit history reset\n",
                 interpolated);
     if (window) {
-        assert(presents == 42);
+        assert(presents == 43);
         std::printf("PASS: %u Win32 swapchain presents and resize\n", presents);
+        // Opt-in real WSI pacing run for PresentMon, after provider/HUD/reset tests.
+        // Use the same swapchain pacing and presentation queue as the renderer.
+        for (int i = 0; i < pacing_seconds * 60; ++i) {
+            present(output->generated.resource);
+            present(color.resource);
+        }
+        if (pacing_seconds) {
+            assert(presents == 43u + unsigned(pacing_seconds) * 120u);
+            std::printf("PASS: %u paced presents at 120 FPS target\n", presents - 43);
+        }
     }
     vmaDestroyBuffer(instance.GetAllocator(), staging, allocation);
 }

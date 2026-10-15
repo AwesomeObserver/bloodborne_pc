@@ -105,7 +105,8 @@ public:
     Frame* PrepareLastFrame();
 
 private:
-  void PresentSingleFrame(Frame *frame, bool is_reusing_frame, bool is_game_frame);
+  void PresentSingleFrame(Frame *frame, bool is_reusing_frame, bool is_game_frame,
+                          std::chrono::nanoseconds interval = {});
   Frame *GetRenderFrame();
 
   void RecreateFrame(Frame *frame, u32 width, u32 height);
