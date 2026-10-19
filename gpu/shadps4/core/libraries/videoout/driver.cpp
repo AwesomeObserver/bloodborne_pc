@@ -36,17 +36,13 @@ extern "C" void runtime_wait_report(double frames);
 #include "imgui/renderer/imgui_core.h"
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/renderer_vulkan/vk_breadcrumbs.h"
+#include "video_core/renderer_vulkan/vk_compile_stats.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 
 extern std::unique_ptr<Vulkan::Presenter> presenter;
 extern std::unique_ptr<AmdGpu::Liverpool> liverpool;
-
-namespace Vulkan {
-extern std::atomic<u64> g_bb_compile_ns;
-extern std::atomic<u32> g_bb_compiles;
-} // namespace Vulkan
 
 namespace Libraries::VideoOut {
 
@@ -445,6 +441,14 @@ void VideoOutDriver::Flip(const Request& req) {
         const u64 images = BbStats::images_registered.load();
         const u64 image_bytes = BbStats::image_upload_bytes.load();
         const u64 buffer_bytes = BbStats::buffer_upload_bytes.load();
+        static u64 last_compile_wait_ns, last_translate_ns, last_pipeline_ns;
+        static u32 last_compile_waits, last_translates, last_pipelines;
+        const u64 compile_wait_ns = Vulkan::g_bb_gpu_wait_ns.load();
+        const u64 translate_ns = Vulkan::g_bb_translate_ns.load();
+        const u64 pipeline_ns = Vulkan::g_bb_pipeline_ns.load();
+        const u32 compile_waits = Vulkan::g_bb_gpu_wait.load();
+        const u32 translates = Vulkan::g_bb_translate.load();
+        const u32 pipelines = Vulkan::g_bb_pipeline.load();
         if (frame_ms > 40.0 && last_gpu_ns != 0) {
             std::printf("Stall: %.1f ms frame; GPU thread on CPU %.1f ms; %llu images registered, "
                         "%.1f MB image uploads, %.1f MB buffer uploads\n",
@@ -452,6 +456,12 @@ void VideoOutDriver::Flip(const Request& req) {
                         static_cast<unsigned long long>(images - last_images),
                         (image_bytes - last_image_bytes) / 1e6,
                         (buffer_bytes - last_buffer_bytes) / 1e6);
+            std::printf("       compile: GPU wait %.1f ms (%u), translate %.1f ms (%u), "
+                        "pipeline %.1f ms (%u)\n",
+                        (compile_wait_ns - last_compile_wait_ns) / 1e6,
+                        compile_waits - last_compile_waits, (translate_ns - last_translate_ns) / 1e6,
+                        translates - last_translates, (pipeline_ns - last_pipeline_ns) / 1e6,
+                        pipelines - last_pipelines);
             std::printf("       %llu draws, %llu dispatches, %llu submissions; GPU thread user %.1f ms, "
                         "kernel %.1f ms, %llu preempted, %llu waits\n",
                         static_cast<unsigned long long>(draws - last_draws),
@@ -460,6 +470,12 @@ void VideoOutDriver::Flip(const Request& req) {
                         (sys_us - last_sys) / 1e3, static_cast<unsigned long long>(invol - last_invol),
                         static_cast<unsigned long long>(vol - last_vol));
         }
+        last_compile_wait_ns = compile_wait_ns;
+        last_translate_ns = translate_ns;
+        last_pipeline_ns = pipeline_ns;
+        last_compile_waits = compile_waits;
+        last_translates = translates;
+        last_pipelines = pipelines;
         if (frame_ms > 40.0 && last_gpu_ns != 0) {
             std::printf("       ms in: resident %.1f, protect %.1f, image create %.1f, "
                         "image refresh %.1f, staging %.1f, waiting for host copies %.1f\n",
@@ -566,6 +582,13 @@ void VideoOutDriver::Flip(const Request& req) {
         if (window >= 5.0) {
             const u32 compiles = Vulkan::g_bb_compiles.exchange(0);
             const u64 compile_ns = Vulkan::g_bb_compile_ns.exchange(0);
+            const u32 translates = Vulkan::g_bb_translate.exchange(0);
+            const u64 translate_ns = Vulkan::g_bb_translate_ns.exchange(0);
+            const u32 pipelines = Vulkan::g_bb_pipeline.exchange(0);
+            const u64 pipeline_ns = Vulkan::g_bb_pipeline_ns.exchange(0);
+            const u32 gpu_waits = Vulkan::g_bb_gpu_wait.exchange(0);
+            const u64 gpu_wait_ns = Vulkan::g_bb_gpu_wait_ns.exchange(0);
+            const u32 motion_compiles = Vulkan::g_bb_motion_compiles.exchange(0);
             const u64 direct = Vulkan::Scheduler::direct_recordings.exchange(0);
             const u64 faults = BbStats::tracker_faults.exchange(0);
             // GPU command thread CPU time per draw: comparable between builds even when the scene
@@ -580,13 +603,17 @@ void VideoOutDriver::Flip(const Request& req) {
             window_draws = all_draws;
             window_gpu_us = gpu_us;
             std::printf("Frame stats: %.1f FPS, worst frame %.1f ms (vblank %u Hz); "
-                        "%u shader/pipeline compiles, %.1f ms; %llu recorder syncs; "
+                        "%u compiles %.1f ms (GPU wait %u/%.1f ms, translate %u/%.1f, "
+                        "pipeline %u/%.1f, motion %u); "
+                        "%llu recorder syncs; "
                         "%.0f write faults/s, %lld hot pages; GPU thread %.2f us/draw, "
                         "%.0f draws/frame, idle %.1f%%; blocked: recorder %.1f%%, host copies "
                         "%.1f%% (%.0f/frame, %.0f/frame not needed), copy threads %.1f%%, GPU ticks %.1f%%; "
                         "reduced-size draws %.0f/frame of %.0f in the scene\n",
                         frames / window, worst_ms, EmulatorSettings.GetVblankFrequency(), compiles,
-                        compile_ns / 1e6, static_cast<unsigned long long>(direct),
+                        compile_ns / 1e6, gpu_waits, gpu_wait_ns / 1e6, translates,
+                        translate_ns / 1e6, pipelines, pipeline_ns / 1e6, motion_compiles,
+                        static_cast<unsigned long long>(direct),
                         faults / window, static_cast<long long>(BbStats::hot_pages.load()),
                         us_per_draw, draws_per_frame,
                         BbStats::gpu_idle_ns.exchange(0) / (window * 1e7),
@@ -698,6 +725,16 @@ void VideoOutDriver::Flip(const Request& req) {
                             "%u frames over 1.5x median\n",
                             median, std::sqrt(std::max(0.0, sq / intervals.size() - mean * mean)),
                             sorted[std::min(sorted.size() - 1, sorted.size() * 99 / 100)], spikes);
+                if (worst_ms > 2.0 * median) {
+                    const char* cause = gpu_wait_ns > 1'000'000
+                                            ? "GPU thread waiting on shader/pipeline compile"
+                                        : compile_ns > 1'000'000
+                                            ? "shader/pipeline compile (background or inline)"
+                                            : "not compile (GPU/CPU hitch)";
+                    std::printf("Frame cause: worst %.1f ms is >2x median %.2f ms; %s "
+                                "(GPU wait %.1f ms, compile work %.1f ms)\n",
+                                worst_ms, median, cause, gpu_wait_ns / 1e6, compile_ns / 1e6);
+                }
             }
             intervals.clear();
             window_start = now;

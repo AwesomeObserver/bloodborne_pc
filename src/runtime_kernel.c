@@ -4,6 +4,7 @@
 #define _GNU_SOURCE
 #include "runtime.h"
 #include <stdatomic.h>
+#include "gpu/bbgpu.h"
 #include <stdio.h>
 #include <inttypes.h>
 #include <stdlib.h>
@@ -184,6 +185,7 @@ static ABI int32_t yield(void) { sched_yield(); return 0; }
 static ABI __attribute__((noreturn)) void hard_exit(int status) {
     printf("Runtime: guest requested _exit(%d)\n",status);
     runtime_report();
+    bbgpu_flush_pipeline_cache();
     fflush(stdout);
     _exit(status);
 }

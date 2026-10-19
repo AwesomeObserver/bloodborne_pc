@@ -41,6 +41,21 @@
 
 namespace Vulkan {
 
+static vk::DescriptorSet DescriptorSetTag(u32 set) {
+    return vk::DescriptorSet{reinterpret_cast<VkDescriptorSet>(uintptr_t(set + 1))};
+}
+
+static u32 GraphicsSetOf(const Shader::Info& stage) {
+    switch (stage.sw_stage) {
+    case Shader::SwStage::Compute:
+        return 0;
+    case Shader::SwStage::Fragment:
+        return Shader::Backend::FragmentSet;
+    default:
+        return Shader::Backend::PreRasterSet;
+    }
+}
+
 static Shader::PushData MakeUserData(const AmdGpu::Regs& regs) {
     // TODO(roamic): Add support for multiple viewports and geometry shaders when ViewportIndex
     // is encountered and implemented in the recompiler.
@@ -68,6 +83,7 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
     object_motion = std::make_unique<ObjectMotion>(instance, scheduler);
     camera_motion = std::make_unique<CameraMotion>(instance, scheduler, texture_cache, runtime);
     camera_motion->SetObjectMotion(object_motion.get());
+    pipeline_cache.WarmUp();
     upscaler = std::make_unique<TemporalUpscaler>(instance, scheduler, texture_cache, runtime,
                                                   *camera_motion, *scene_targets);
 #ifdef _WIN32
@@ -97,7 +113,9 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
     });
 }
 
-Rasterizer::~Rasterizer() = default;
+Rasterizer::~Rasterizer() {
+    pipeline_cache.Sync();
+}
 
 bool Rasterizer::HonestLabels() {
     static const bool on = [] {
@@ -2155,6 +2173,7 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
             }
             set_writes.resize(set_writes.size() + stage->buffers.size() + stage->images.size() +
                               stage->samplers.size());
+            binding.set = GraphicsSetOf(*stage);
             stage->PushUd(binding, push_data);
             const PreparedStage* prepared = FindPreparedStage(*stage);
             BindBuffers(*stage, prepared, binding, push_data, set_write_index);
@@ -2184,6 +2203,7 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
             const u32 num_descriptors =
                 num_buffers + static_cast<u32>(stage->images.size() + stage->samplers.size());
             set_writes.resize(set_writes.size() + num_descriptors);
+            binding.set = GraphicsSetOf(*stage);
             stage->PushUd(binding, push_data);
             const PreparedStage* prepared = FindPreparedStage(*stage);
             buffer_stages[task.count] = {stage, prepared, binding, set_write_index};
@@ -2812,7 +2832,7 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
         }
 
         auto& set_write = set_writes[write_index++];
-        set_write.dstSet = VK_NULL_HANDLE;
+        set_write.dstSet = DescriptorSetTag(binding.set);
         set_write.dstBinding = binding.unified++;
         set_write.dstArrayElement = 0;
         set_write.descriptorCount = 1;
@@ -2872,7 +2892,7 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
         // Descriptor writes: one per image (no mip arrays in a memoized set).
         for (u32 i = 0; i < stage.images.size(); ++i) {
             auto& set_write = set_writes[write_index++];
-            set_write.dstSet = VK_NULL_HANDLE;
+            set_write.dstSet = DescriptorSetTag(binding.set);
             set_write.dstBinding = binding.unified++;
             set_write.dstArrayElement = 0;
             set_write.descriptorCount = 1;
@@ -3129,7 +3149,7 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
         const auto& desc = *image_bindings[image_binding_idx].second;
         const bool is_storage = desc.type == VideoCore::TextureCache::BindingType::Storage;
         auto& set_write = set_writes[write_index++];
-        set_write.dstSet = VK_NULL_HANDLE;
+        set_write.dstSet = DescriptorSetTag(binding.set);
         set_write.dstBinding = binding.unified;
         set_write.dstArrayElement = 0;
         set_write.descriptorCount = array_size;
@@ -3195,7 +3215,7 @@ void Rasterizer::BindSamplers(const Shader::Info& stage, const PreparedStage* pr
             ssharp, Regs().ta_bc_base, sampler.is_depth, sampler.is_depth ? 0.0f : sampler_lod_bias);
         image_infos.emplace_back(vk_sampler, VK_NULL_HANDLE, vk::ImageLayout::eGeneral);
         auto& set_write = set_writes[write_index++];
-        set_write.dstSet = VK_NULL_HANDLE;
+        set_write.dstSet = DescriptorSetTag(binding.set);
         set_write.dstBinding = binding.unified++;
         set_write.dstArrayElement = 0;
         set_write.descriptorCount = 1;

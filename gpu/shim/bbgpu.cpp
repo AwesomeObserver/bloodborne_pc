@@ -33,6 +33,7 @@
 #include "core/memory.h"
 #include "core/signals.h"
 #include "sdl_window.h"
+#include "video_core/cache_storage.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 
 extern "C" {
@@ -260,6 +261,10 @@ static void StartProfileWriter() {
 }
 #endif
 
+extern "C" void bbgpu_flush_pipeline_cache(void) {
+    Storage::DataBase::Instance().Close();
+}
+
 extern "C" int bbgpu_init(const BbGpuConfig* config) {
     BbSettings::Load();
 #ifdef BB_PGO_GENERATE
@@ -288,6 +293,8 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
             SDL_WaitEventTimeout(nullptr, 8);
         }
         LOG_INFO(Frontend, "Window closed by user");
+        // `_Exit` skips Rasterizer's destructor, which finishes pending user-cache writes.
+        Storage::DataBase::Instance().Close();
         std::fflush(stdout);
         std::_Exit(0);
     });
@@ -338,6 +345,10 @@ extern "C" int bbgpu_handle_fault(void* ucontext, void* address) {
 extern "C" void bbgpu_patch_image(unsigned char* image, uint64_t size) {
     BbGnmHooks::PatchImage(image, size);
     BbMouse::Install(image, size);
+}
+
+extern "C" int bbgpu_handle_illegal(void* ucontext) {
+    return Core::Signals::Instance()->DispatchIllegalInstruction(ucontext) ? 1 : 0;
 }
 
 extern "C" unsigned bbgpu_symbol_count(void) {

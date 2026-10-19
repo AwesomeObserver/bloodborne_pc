@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <cstring>
+#include <mutex>
 #include <unordered_map>
 #include <boost/container/flat_map.hpp>
 #include <queue>
@@ -12,6 +15,13 @@
 #include "common/logging/log.h"
 #include "common/path_util.h"
 #include "common/signal_context.h"
+#include "bbport_toggles.h"
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 #include "core/emulator_settings.h"
 #include "core/signals.h"
 #include "shader_recompiler/info.h"
@@ -29,14 +39,101 @@ using namespace Xbyak::util;
 
 static Xbyak::CodeGenerator g_srt_codegen(32_MB);
 static const u8* g_srt_codegen_start = nullptr;
+/// Shaders are translated on several threads (compile workers, the GPU thread, cache preload);
+/// all of them append walkers to the one code buffer.
+static std::mutex g_srt_codegen_mutex;
+
+namespace {
+void EnsureSrtHandlers();
+}
 
 namespace Shader {
 
 PFN_SrtWalker RegisterWalkerCode(const u8* ptr, size_t size) {
+    std::scoped_lock lock{g_srt_codegen_mutex};
+    EnsureSrtHandlers();
     const auto func_addr = (PFN_SrtWalker)g_srt_codegen.getCurr();
     g_srt_codegen.db(ptr, size);
     g_srt_codegen.ready();
     return func_addr;
+}
+
+bool ValidateWalkerCode(const u8* code, size_t size, u32 flat_dwords) {
+    if (!code || size == 0) {
+        return false;
+    }
+    const u64 flat_bytes = u64(flat_dwords) * sizeof(u32);
+    size_t at = 0;
+    bool ended = false;
+    while (at < size) {
+        ZydisDecodedInstruction instruction;
+        ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
+        const ZyanStatus status = Common::Decoder::Instance()->decodeInstruction(
+            instruction, operands, const_cast<u8*>(code + at), size - at);
+        if (!ZYAN_SUCCESS(status)) {
+            return false;
+        }
+        switch (instruction.meta.category) {
+        case ZYDIS_CATEGORY_RET:
+            ended = true;
+            break;
+        case ZYDIS_CATEGORY_COND_BR:
+        case ZYDIS_CATEGORY_UNCOND_BR: {
+            if (operands[0].type != ZYDIS_OPERAND_TYPE_IMMEDIATE) {
+                return false;
+            }
+            const s64 target = s64(at + instruction.length) + operands[0].imm.value.s;
+            if (target < 0 || u64(target) >= size) {
+                return false;
+            }
+            break;
+        }
+        case ZYDIS_CATEGORY_CALL:
+        case ZYDIS_CATEGORY_SYSCALL:
+        case ZYDIS_CATEGORY_INTERRUPT:
+            return false;
+        default:
+            break;
+        }
+        for (u32 i = 0; i < instruction.operand_count; ++i) {
+            const auto& op = operands[i];
+            if (op.type != ZYDIS_OPERAND_TYPE_MEMORY ||
+                !(op.actions & ZYDIS_OPERAND_ACTION_MASK_WRITE)) {
+                continue;
+            }
+            // push/pop and the scratch dword at [rsp] of the offset computations.
+            if (op.mem.base == ZYDIS_REGISTER_RSP) {
+                continue;
+            }
+            if (op.mem.base != ZYDIS_REGISTER_RSI || op.mem.index != ZYDIS_REGISTER_NONE) {
+                return false;
+            }
+            const s64 disp = op.mem.disp.value;
+            if (disp < 0 || u64(disp) + op.size / 8 > flat_bytes) {
+                return false;
+            }
+        }
+        at += instruction.length;
+    }
+    return ended;
+}
+
+void RunSrtWalkerSafe(PFN_SrtWalker fn, const u32* user_data, u32* flat, u32 user_dwords,
+                      u32 flat_dwords) {
+    sigjmp_buf recover;
+    sigjmp_buf* previous = runtime_fault_recover;
+    if (sigsetjmp(recover, 0)) {
+        runtime_fault_recover = previous;
+        return;
+    }
+    runtime_fault_recover = &recover;
+    if (flat && flat_dwords && user_data && user_dwords) {
+        std::memcpy(flat, user_data, std::min(user_dwords, flat_dwords) * sizeof(u32));
+    }
+    if (fn) {
+        fn(user_data, flat);
+    }
+    runtime_fault_recover = previous;
 }
 
 } // namespace Shader
@@ -68,56 +165,74 @@ static void DumpSrtProgram(const Shader::Info& info, const u8* code, size_t code
     }
 }
 
+static bool InSrtWalker(const void* code) {
+    const u8* start = reinterpret_cast<const u8*>(g_srt_codegen.getCode());
+    const u8* end = start + g_srt_codegen.getSize();
+    const auto* at = static_cast<const u8*>(code);
+    return at >= start && at < end;
+}
+
 static bool SrtWalkerSignalHandler(void* context, void* fault_address) {
-    // Only handle if the fault address is within the SRT code range
-    const u8* code_start = g_srt_codegen_start;
-    const u8* code_end = code_start + g_srt_codegen.getSize();
     const void* code = Common::GetRip(context);
-    if (code < code_start || code >= code_end) {
-        return false; // Not in SRT code range
+    if (!InSrtWalker(code)) {
+        return false;
     }
 
-    // Patch instruction to zero register
     ZydisDecodedInstruction instruction;
     ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
     ZyanStatus status = Common::Decoder::Instance()->decodeInstruction(instruction, operands,
                                                                        const_cast<void*>(code), 15);
+    if (!ZYAN_SUCCESS(status) || instruction.mnemonic != ZYDIS_MNEMONIC_MOV ||
+        operands[0].type != ZYDIS_OPERAND_TYPE_REGISTER ||
+        operands[1].type != ZYDIS_OPERAND_TYPE_MEMORY) {
+        return false;
+    }
 
-    ASSERT(ZYAN_SUCCESS(status) && instruction.mnemonic == ZYDIS_MNEMONIC_MOV &&
-           operands[0].type == ZYDIS_OPERAND_TYPE_REGISTER &&
-           operands[1].type == ZYDIS_OPERAND_TYPE_MEMORY);
-
-    size_t len = instruction.length;
-    const size_t patch_size = 3;
-    u8* code_patch = const_cast<u8*>(reinterpret_cast<const u8*>(code));
-
-    // We can only encounter rdi or r10d as the first operand in a
-    // fault memory access for SRT walker.
+    const size_t len = instruction.length;
+    auto* code_patch = const_cast<u8*>(static_cast<const u8*>(code));
+#ifdef _WIN32
+    DWORD old_protect = 0;
+    if (!VirtualProtect(code_patch, len, PAGE_EXECUTE_READWRITE, &old_protect)) {
+        return false;
+    }
+#endif
     switch (operands[0].reg.value) {
     case ZYDIS_REGISTER_RDI:
-        // mov rdi, [rdi + (off_dw << 2)] -> xor rdi, rdi
         code_patch[0] = 0x48;
         code_patch[1] = 0x31;
         code_patch[2] = 0xFF;
         break;
     case ZYDIS_REGISTER_R10D:
-        // mov r10d, [rdi + (off_dw << 2)] -> xor r10d, r10d
         code_patch[0] = 0x45;
         code_patch[1] = 0x31;
         code_patch[2] = 0xD2;
         break;
     default:
-        UNREACHABLE_MSG("Unsupported register for SRT walker patch");
+#ifdef _WIN32
+        VirtualProtect(code_patch, len, old_protect, &old_protect);
+#endif
         return false;
     }
-
-    // Fill nops
-    memset(code_patch + patch_size, 0x90, len - patch_size);
-
+    if (len > 3) {
+        std::memset(code_patch + 3, 0x90, len - 3);
+    }
+#ifdef _WIN32
+    VirtualProtect(code_patch, len, old_protect, &old_protect);
+    FlushInstructionCache(GetCurrentProcess(), code_patch, len);
+#endif
     LOG_WARNING(Render_Recompiler, "Patched SRT walker at {}, fault address {}", code,
                 fault_address);
-
     return true;
+}
+
+static void EnsureSrtHandlers() {
+    if (g_srt_codegen_start) {
+        return;
+    }
+    g_srt_codegen_start = g_srt_codegen.getCode();
+    auto* signals = Core::Signals::Instance();
+    constexpr u32 priority = 1;
+    signals->RegisterAccessViolationHandler(SrtWalkerSignalHandler, priority);
 }
 
 using namespace Shader;
@@ -640,13 +755,11 @@ static void GenerateSrtProgram(Info& info, PassInfo& pass_info) {
         return;
     }
 
+    std::scoped_lock lock{g_srt_codegen_mutex};
     // Register the signal handler for SRT walker, if not already registered
     if (g_srt_codegen_start == nullptr) {
+        EnsureSrtHandlers();
         g_srt_codegen_start = c.getCurr();
-        auto* signals = Core::Signals::Instance();
-        // Call after the memory invalidation handler
-        constexpr u32 priority = 1;
-        signals->RegisterAccessViolationHandler(SrtWalkerSignalHandler, priority);
     }
 
     info.srt_info.walker_func = c.getCurr<PFN_SrtWalker>();
@@ -669,6 +782,13 @@ static void GenerateSrtProgram(Info& info, PassInfo& pass_info) {
     }
 
     info.srt_info.flattened_bufsize_dw = pass_info.dst_off_dw;
+    if (!ValidateWalkerCode(reinterpret_cast<const u8*>(info.srt_info.walker_func),
+                            info.srt_info.walker_func_size, info.srt_info.flattened_bufsize_dw)) {
+        LOG_ERROR(Render_Recompiler, "SRT walker of shader {:#x} failed validation",
+                  info.pgm_hash);
+        std::printf("SRT walker of shader %#llx failed validation\n",
+                    static_cast<unsigned long long>(info.pgm_hash));
+    }
 }
 
 static bool IsReadConstSource(const IR::Value base) {
@@ -866,6 +986,20 @@ namespace Shader {
 
 PFN_SrtWalker RegisterWalkerCode(const u8* ptr, size_t size) {
     UNREACHABLE_MSG("RegisterWalkerCode unimplemented for target architecture.");
+}
+
+bool ValidateWalkerCode(const u8* code, size_t size, u32 flat_dwords) {
+    return false;
+}
+
+void RunSrtWalkerSafe(PFN_SrtWalker fn, const u32* user_data, u32* flat, u32 user_dwords,
+                      u32 flat_dwords) {
+    if (flat && flat_dwords && user_data && user_dwords) {
+        std::memcpy(flat, user_data, std::min(user_dwords, flat_dwords) * sizeof(u32));
+    }
+    if (fn) {
+        fn(user_data, flat);
+    }
 }
 
 namespace Optimization {

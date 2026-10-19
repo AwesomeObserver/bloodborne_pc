@@ -383,6 +383,20 @@ std::tuple<ImageId, int, int> TextureCache::ResolveOverlap(const ImageInfo& imag
             return {merged_image_id, -1, -1};
         }
 
+        // Same address reused with a different mip/layer layout (pooled texture memory): the
+        // resources neither contain nor are contained by the cached ones. Treat it as a new
+        // image, like the tiling-mode case.
+        const auto& old_res = cache_image.info.resources;
+        const auto& new_res = image_info.resources;
+        const bool old_fits = old_res.levels <= new_res.levels && old_res.layers <= new_res.layers;
+        const bool new_fits = new_res.levels <= old_res.levels && new_res.layers <= old_res.layers;
+        if (!old_fits && !new_fits) {
+            if (safe_to_delete) {
+                FreeImage(cache_image_id);
+            }
+            return {merged_image_id, -1, -1};
+        }
+
         // Enhanced debug logging for unreachable case
         // Calculate expected size based on format and dimensions
         u64 expected_size =

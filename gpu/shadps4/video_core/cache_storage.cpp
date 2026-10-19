@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "common/elf_info.h"
+#include "common/logging/log.h"
 #include "common/io_file.h"
 #include "common/polyfill_thread.h"
 #include "common/thread.h"
@@ -218,7 +219,7 @@ void DataBase::Load(BlobType type, const std::string& name, std::vector<u8>& dat
 
     auto path = EmulatorSettings.IsPipelineCacheArchived() ? std::filesystem::path{name}
                                                            : cache_path / name;
-    return LoadVector(type, path, data);
+    LoadVector(type, path, data);
 }
 
 void DataBase::Load(BlobType type, const std::string& name, std::vector<u32>& data) {
@@ -228,7 +229,7 @@ void DataBase::Load(BlobType type, const std::string& name, std::vector<u32>& da
 
     auto path = EmulatorSettings.IsPipelineCacheArchived() ? std::filesystem::path{name}
                                                            : cache_path / name;
-    return LoadVector(type, path, data);
+    LoadVector(type, path, data);
 }
 
 void DataBase::ForEachBlob(BlobType type, const std::function<void(std::vector<u8>&& data)>& func) {
@@ -248,8 +249,11 @@ void DataBase::ForEachBlob(BlobType type, const std::function<void(std::vector<u
             }
         }
     } else {
-        for (const auto& file_name : std::filesystem::directory_iterator{cache_path}) {
-            if (file_name.path().extension().string().ends_with(ext)) {
+        if (std::filesystem::exists(cache_path)) {
+            for (const auto& file_name : std::filesystem::directory_iterator{cache_path}) {
+                if (!file_name.path().extension().string().ends_with(ext)) {
+                    continue;
+                }
                 using namespace Common::FS;
                 const auto& file = IOFile{file_name, FileAccessMode::Read};
                 if (file.IsOpen()) {
@@ -269,6 +273,10 @@ void DataBase::Clear() {
     std::error_code ec;
     u64 removed = 0;
     for (const auto& entry : std::filesystem::directory_iterator(cache_path, ec)) {
+        // The driver's own pipeline cache does not depend on our serialization versions.
+        if (entry.path().filename() == "vk_pipeline_cache.bin") {
+            continue;
+        }
         if (entry.is_regular_file(ec) && std::filesystem::remove(entry.path(), ec)) {
             ++removed;
         }
