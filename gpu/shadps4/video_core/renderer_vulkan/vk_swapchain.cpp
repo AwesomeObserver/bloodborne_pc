@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <cstdint>
 #include <limits>
+#include <thread>
+#ifdef _WIN32
+extern "C" void compat_sleep_ns(uint64_t ns);
+#endif
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "core/emulator_settings.h"
@@ -140,6 +145,38 @@ bool Swapchain::AcquireNextImage() {
     return !needs_recreation;
 }
 
+void Swapchain::WaitForPresentSlot(std::chrono::nanoseconds interval, vk::Fence ready) {
+    present_interval = interval;
+    if (interval.count() <= 0) {
+        next_present = {};
+        return;
+    }
+    // Pacing vkQueuePresent calls is ineffective while their blits are still
+    // behind game rendering. Make the image ready before waiting for its slot.
+    if (ready) {
+        Check(instance.GetDevice().waitForFences(ready, true,
+                                                std::numeric_limits<u64>::max()));
+    }
+    using Clock = std::chrono::steady_clock;
+    auto now = Clock::now();
+    while (now < next_present) {
+        const auto remaining = next_present - now;
+        constexpr auto margin = std::chrono::microseconds(250);
+        if (remaining > margin) {
+            const auto sleep = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                remaining - margin);
+#ifdef _WIN32
+            compat_sleep_ns(u64(sleep.count()));
+#else
+            std::this_thread::sleep_for(sleep);
+#endif
+        } else {
+            std::this_thread::yield();
+        }
+        now = Clock::now();
+    }
+}
+
 bool Swapchain::Present() {
     const vk::PresentInfoKHR present_info = {
         .waitSemaphoreCount = 1,
@@ -149,7 +186,19 @@ bool Swapchain::Present() {
         .pImageIndices = &image_index,
     };
 
+    const auto present_start = std::chrono::steady_clock::now();
     auto result = instance.GetPresentQueue().presentKHR(present_info);
+    // Carry the slot across generated/real pairs. Rebase late frames instead
+    // of catching up with a short interval after a delayed presentation.
+    if (present_interval.count() > 0) {
+        const auto late_limit = std::min(present_interval / 8,
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::milliseconds(1)));
+        if (next_present == std::chrono::steady_clock::time_point{} ||
+            present_start > next_present + late_limit) {
+            next_present = present_start;
+        }
+        next_present += present_interval;
+    }
     if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR) {
         needs_recreation = true;
     } else {
@@ -267,6 +316,8 @@ void Swapchain::SetSurfaceProperties() {
 }
 
 void Swapchain::Destroy() {
+    next_present = {};
+    present_interval = {};
     vk::Device device = instance.GetDevice();
     const auto wait_result = device.waitIdle();
     if (wait_result != vk::Result::eSuccess) {

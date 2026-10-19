@@ -434,10 +434,15 @@ bool Instance::CreateDevice() {
         return false;
     }
 
-    static constexpr std::array queue_priorities = {1.0f};
+    static constexpr std::array queue_priorities = {1.0f, 1.0f};
+    const char* present_queue_env = std::getenv("BB_PRESENT_QUEUE");
+    const u32 graphics_queue_count =
+        family_properties[queue_family_index].queueCount > 1 &&
+                !(present_queue_env && present_queue_env[0] == '0')
+            ? 2u : 1u;
     const vk::DeviceQueueCreateInfo queue_info = {
         .queueFamilyIndex = queue_family_index,
-        .queueCount = static_cast<u32>(queue_priorities.size()),
+        .queueCount = graphics_queue_count,
         .pQueuePriorities = queue_priorities.data(),
     };
     // bbport: a queue of a compute and transfer family without graphics, for reading back GPU
@@ -723,7 +728,11 @@ bool Instance::CreateDevice() {
     }
 
     graphics_queue = device->getQueue(queue_family_index, 0);
-    present_queue = device->getQueue(queue_family_index, 0);
+    // Keep presentation copies out of the next game frame's graphics queue.
+    // Both queues use the same family; the existing timeline waits order access.
+    present_queue = device->getQueue(queue_family_index, graphics_queue_count - 1);
+    LOG_INFO(Render_Vulkan, "Presentation queue: {} (graphics family {})",
+             graphics_queue_count - 1, queue_family_index);
     if (readback_family_index != NoFamily) {
         readback_queue = device->getQueue(readback_family_index, 0);
         LOG_INFO(Render_Vulkan, "Readback queue: family {}", readback_family_index);

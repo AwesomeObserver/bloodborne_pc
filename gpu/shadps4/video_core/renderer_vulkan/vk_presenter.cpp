@@ -40,9 +40,7 @@
 #include <thread>
 #include <vector>
 #include <vk_mem_alloc.h>
-#ifdef _WIN32
-extern "C" void compat_sleep_ns(uint64_t ns);
-#endif
+
 #ifdef MemoryBarrier
 #undef MemoryBarrier // bbport: winnt.h macro (through fmt), clashes with vk::MemoryBarrier
 #endif
@@ -136,7 +134,8 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
     : window{window_}, liverpool{liverpool_},
       instance{window, EmulatorSettings.GetGpuId(), EmulatorSettings.IsVkValidationEnabled(),
                EmulatorSettings.IsVkCrashDiagnosticEnabled()},
-      draw_scheduler{instance, true}, present_scheduler{instance}, flip_scheduler{instance},
+      draw_scheduler{instance, true},
+      present_scheduler{instance, false, instance.GetPresentQueue()}, flip_scheduler{instance},
       swapchain{instance, window}, runtime{instance, draw_scheduler},
       rasterizer{std::make_unique<Rasterizer>(instance, draw_scheduler, runtime, liverpool)},
       texture_cache{rasterizer->GetTextureCache()} {
@@ -526,8 +525,10 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
              .image = source.image,
              .viewType = vk::ImageViewType::e2D,
              .format = snapshot_format,
-             .components = {vk::ComponentSwizzle::eIdentity, vk::ComponentSwizzle::eIdentity,
-                            vk::ComponentSwizzle::eIdentity, vk::ComponentSwizzle::eOne},
+             // Bloodborne's display-copy shader exports the UI target as .bgra.
+             // Apply that same swizzle to the pre-HUD snapshot before comparing it.
+             .components = {vk::ComponentSwizzle::eB, vk::ComponentSwizzle::eG,
+                            vk::ComponentSwizzle::eR, vk::ComponentSwizzle::eOne},
              .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}}));
         draw_scheduler.DeferOperation(
             [device, snapshot_view] { device.destroyImageView(snapshot_view); });
@@ -722,22 +723,28 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
             generated.present_done = *frame->generation->present_done;
             settings.frame_generation_active = true;
             settings.frame_generation_render_ms = frame->generation->input->frame_ms;
-            PresentSingleFrame(&generated, true, false);
-            const auto half = std::chrono::duration<double, std::milli>(
-                std::clamp(frame->generation->input->frame_ms * .5, 2.0, 33.333));
-#ifdef _WIN32
-            // The normal Windows sleep can round an 8 ms interval to 15.6 ms.
-            // Reuse the runtime's high-resolution waitable timer for frame pacing.
-            compat_sleep_ns(u64(half.count() * 1'000'000));
-#else
-            std::this_thread::sleep_for(half);
-#endif
+            // A fixed render target must not feed our own presentation delay
+            // back into the next interval and progressively slow down the game.
+            static const u32 preset_fps =
+                u32(std::max(0L, EmulatorSettingsImpl::Number("BB_FPS", 0)));
+            const u32 limit = EmulatorSettings.GetFrameLimit();
+            const u32 target_fps = limit && preset_fps ? std::min(limit, preset_fps)
+                                                      : std::max(limit, preset_fps);
+            const double render_ms = target_fps ? 1000.0 / target_fps
+                                                : frame->generation->input->frame_ms;
+            const auto interval = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::duration<double, std::milli>(
+                    std::clamp(render_ms * .5, 2.0, 33.333)));
+            PresentSingleFrame(&generated, true, false, interval);
+            PresentSingleFrame(frame, is_reusing_frame, is_game_frame, interval);
+            return;
         }
     }
     PresentSingleFrame(frame, is_reusing_frame, is_game_frame);
 }
 
-void Presenter::PresentSingleFrame(Frame *frame, bool is_reusing_frame, bool is_game_frame) {
+void Presenter::PresentSingleFrame(Frame *frame, bool is_reusing_frame, bool is_game_frame,
+                                   std::chrono::nanoseconds interval) {
     // Free the frame for reuse
     const auto free_frame = [&] {
         if (!is_reusing_frame) {
@@ -904,6 +911,9 @@ void Presenter::PresentSingleFrame(Frame *frame, bool is_reusing_frame, bool is_
     info.AddSignal(swapchain.GetPresentReadySemaphore());
     info.AddSignal(frame->present_done);
     scheduler.Flush(info);
+
+    // Wait outside submit_mutex so the game can keep submitting its next frame.
+    swapchain.WaitForPresentSlot(interval, frame->present_done);
 
     // Present to swapchain.
     {

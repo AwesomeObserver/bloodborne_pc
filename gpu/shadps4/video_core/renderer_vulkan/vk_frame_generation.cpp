@@ -204,7 +204,7 @@ FrameGeneration::FrameGeneration(const Instance &instance_, Scheduler &scheduler
     std::array<vk::DescriptorSetLayoutBinding, 5> bindings{};
     for (u32 i = 0; i < 5; ++i)
         bindings[i] = {.binding = i,
-                       .descriptorType = i == 2 || i == 3 ? vk::DescriptorType::eStorageImage
+                       .descriptorType = i >= 1 && i <= 3 ? vk::DescriptorType::eStorageImage
                                                           : vk::DescriptorType::eSampledImage,
                        .descriptorCount = 1,
                        .stageFlags = vk::ShaderStageFlagBits::eCompute};
@@ -374,7 +374,7 @@ bool FrameGeneration::Record(vk::CommandBuffer cmd, const Dlss::Resource &color,
         infos[i] = {.imageView = images[i].view, .imageLayout = vk::ImageLayout::eGeneral};
         writes[i] = {.dstBinding = i,
                      .descriptorCount = 1,
-                     .descriptorType = i == 2 || i == 3 ? vk::DescriptorType::eStorageImage
+                     .descriptorType = i >= 1 && i <= 3 ? vk::DescriptorType::eStorageImage
                                                         : vk::DescriptorType::eSampledImage,
                      .pImageInfo = &infos[i]};
     }

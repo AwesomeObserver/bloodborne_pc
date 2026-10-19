@@ -4,7 +4,7 @@
 #extension GL_EXT_shader_image_load_formatted : require
 layout(local_size_x=8,local_size_y=8) in;
 layout(binding=0) uniform texture2D final_color;
-layout(binding=1) uniform texture2D hudless_color;
+layout(binding=1,rgba8) uniform image2D hudless_color;
 layout(binding=2,rgba16f) uniform image2D ui_color;
 layout(binding=3) uniform writeonly image2D generated_color;
 layout(binding=4) uniform texture2D generated_read;
@@ -14,11 +14,14 @@ void main() {
     if(any(greaterThanEqual(p,textureSize(final_color,0)))) return;
     vec4 real=texelFetch(final_color,p,0);
     if(compose==0) {
-        vec3 delta=abs(real.rgb-texelFetch(hudless_color,p,0).rgb);
-        // The game has no separate HUD alpha target. An opaque coverage mask
-        // preserves its final pixels, including antialiased edges, exactly.
-        float alpha=max(max(delta.r,delta.g),delta.b)>2.0/255.0 ? 1.0 : 0.0;
+        vec3 delta=abs(real.rgb-imageLoad(hudless_color,p).rgb);
+        // Allow the small color shift introduced by the game's display conversion.
+        // Otherwise the mask replaces the interpolated scene with the real frame.
+        float alpha=max(max(delta.r,delta.g),delta.b)>4.0/255.0 ? 1.0 : 0.0;
         imageStore(ui_color,p,vec4(real.rgb*alpha,alpha));
+        // Match the displayed scene exactly outside the HUD, avoiding brightness
+        // flicker between real and generated frames. Keep the pre-HUD underlay.
+        if(alpha==0.0) imageStore(hudless_color,p,real);
     } else {
         vec4 ui=imageLoad(ui_color,p);
         vec3 scene=texelFetch(generated_read,p,0).rgb;

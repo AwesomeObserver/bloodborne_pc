@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <mutex>
 #include <vector>
 #include "common/types.h"
@@ -30,6 +31,9 @@ public:
 
     /// Acquires the next image in the swapchain.
     bool AcquireNextImage();
+
+    /// Wait for the copy and the next paced slot without holding the queue mutex.
+    void WaitForPresentSlot(std::chrono::nanoseconds interval, vk::Fence ready = {});
 
     /// Presents the current image and move to the next one
     bool Present();
@@ -136,6 +140,8 @@ private:
     u32 image_count = 0;
     u32 image_index = 0;
     u32 frame_index = 0;
+    std::chrono::steady_clock::time_point next_present{};
+    std::chrono::nanoseconds present_interval{};
     bool needs_recreation = true;
     bool zero_extent = false; ///< bbport: the surface was 0x0 (minimised) at the last Create
     bool needs_hdr = false;    // The game requested HDR swapchain
